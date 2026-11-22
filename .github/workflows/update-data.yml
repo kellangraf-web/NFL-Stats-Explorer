@@ -1,0 +1,62 @@
+# Rebuilds players.json every morning, commits it only if the stats changed,
+# and redeploys the GitHub Pages site.
+name: Update data and deploy
+
+on:
+  schedule:
+    - cron: "17 11 * * *"     # daily, 11:17 UTC (~4-5 AM in Colorado), after nflverse's overnight refresh
+  workflow_dispatch:           # adds a "Run workflow" button for manual updates
+  push:
+    branches: [main]           # redeploy when you edit the page yourself
+
+permissions:
+  contents: write              # push the updated players.json
+  pages: write                 # publish to GitHub Pages
+  id-token: write              # required by the Pages deploy action
+
+concurrency:
+  group: pages
+  cancel-in-progress: false    # never cut off a deploy halfway
+
+jobs:
+  update-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build players.json from the latest nflverse stats
+        run: python build_data.py
+
+      - name: Commit players.json if the stats changed
+        run: |
+          if git diff --quiet players.json; then
+            echo "No new games - nothing to commit."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add players.json
+            git commit -m "Update stats ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      # --- Publish only the site files (page + data) ---
+      - name: Collect site files
+        run: mkdir _site && cp index.html players.json _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

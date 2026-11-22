@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QB First-N-Seasons Explorer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  /* ---- Theme tokens (light default, dark via OS or data-theme) ---- */
+  .viz-root {
+    color-scheme: light;
+    --surface-0: #f4f3f0; --surface-1: #fcfcfb; --border: #e2e1dc;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8984;
+    --grid: #ecebe7; --series-1: #2a78d6; --other: #b9b8b2; --accent-bg: #e8f0fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8d8c86;
+      --grid: #262624; --series-1: #3987e5; --other: #55554f; --accent-bg: #1d2a3a;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8d8c86;
+    --grid: #262624; --series-1: #3987e5; --other: #55554f; --accent-bg: #1d2a3a;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root {
+    background: var(--surface-0); color: var(--text-primary); min-height: 100vh;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 20px 16px 40px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); margin: 0 0 16px; }
+
+  /* ---- Control bar: one row above the charts ---- */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 16px; position: sticky; top: 0; z-index: 5;
+  }
+  .ctl { display: flex; align-items: center; gap: 10px; }
+  .ctl-label { color: var(--text-secondary); font-size: 13px; }
+  .slider-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  input[type=range] { width: 180px; accent-color: var(--series-1); }
+  .n-val { font-weight: 650; min-width: 150px; font-variant-numeric: tabular-nums; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    border: 0; background: transparent; color: var(--text-secondary);
+    padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+
+  /* ---- Chart cards ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px 10px; min-width: 0; }
+  .card h2 { font-size: 16px; margin: 0; }
+  .card .desc { color: var(--text-secondary); font-size: 12.5px; margin: 2px 0 8px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .chart { position: relative; width: 100%; }
+  svg text { fill: var(--text-secondary); font-size: 11px; }
+  .axis path, .axis line { stroke: var(--border); }
+  .gridline line { stroke: var(--grid); }
+  .gridline path { display: none; }
+  .axis-title { fill: var(--text-muted); font-size: 11.5px; }
+  .pt { cursor: pointer; transition: r .12s; }
+  .lbl { fill: var(--text-primary); font-size: 11px; font-weight: 550; paint-order: stroke; stroke: var(--surface-1); stroke-width: 3px; pointer-events: none; }
+
+  /* ---- Tooltip (kept inside the card) ---- */
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 8px 10px; font-size: 12px; min-width: 170px; z-index: 3;
+  }
+  .tip b { display: block; font-size: 13px; margin-bottom: 3px; color: var(--text-primary); }
+  .tip .row { display: flex; justify-content: space-between; gap: 14px; color: var(--text-secondary); }
+  .tip .row span:last-child { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  /* ---- Leader tables ---- */
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th { text-align: right; color: var(--text-muted); font-weight: 500; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th:first-child, td:first-child { text-align: left; color: var(--text-muted); width: 24px; }
+  td.sortcol { font-weight: 650; }
+  tr:hover td { background: var(--accent-bg); }
+  @media (max-width: 480px) {
+    .viz-root { padding: 14px 10px 32px; }
+    .card { padding: 12px 10px 8px; }
+    table { font-size: 11.5px; }
+    th, td { padding: 5px 3px; }
+    /* keep the play row inside a phone screen */
+    input[type=range] { width: 130px; }
+    .n-val { min-width: 0; }
+    .pins input[type=text] { width: 150px; }
+  }
+
+  /* ---- Play button + speed ---- */
+  .play {
+    width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--series-1); color: #fff; cursor: pointer; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 13px; flex: none;
+  }
+  .play:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  select.speed { font: inherit; font-size: 12.5px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); }
+
+  /* ---- Player color picker + chips ---- */
+  .pins { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; padding-top: 10px; border-top: 1px solid var(--border); }
+  .pins input[type=text] { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-0); color: var(--text-primary); width: 180px; }
+  .pins input[type=color] { width: 34px; height: 30px; padding: 0 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); cursor: pointer; }
+  .btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--accent-bg); color: var(--text-primary); cursor: pointer; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; background: var(--surface-0); }
+  .chip i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .chip button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; }
+  .hint { color: var(--text-muted); font-size: 12px; }
+
+  /* ---- 25-row tables scroll inside the card with a sticky header ---- */
+  .tbl-wrap { max-height: 440px; overflow: auto; }
+  th { position: sticky; top: 0; background: var(--surface-1); z-index: 1; }
+  td .tsw { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
+  tr.out td { color: var(--text-muted); }
+  tr.sep td { border-top: 2px solid var(--border); }
+  .notes { color: var(--text-muted); font-size: 12px; margin-top: 18px; line-height: 1.55; }
+  .notes p { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<div class="wrap">
+  <h1>First-N-Seasons Explorer</h1>
+  <p class="sub">Cumulative yards vs. yards per game, or cumulative TDs vs. TDs per game (set by Rank by), over each player's first <span id="nSub">10</span> season<span id="nPl">s</span>. Seasons count from the rookie year.</p>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="ctl">
+      <span class="ctl-label">Seasons</span>
+      <div class="slider-wrap">
+        <button class="play" id="playBtn" aria-label="Play">&#9654;</button>
+        <input id="nSlider" type="range" min="1" max="23" step="1" value="10" aria-label="Number of seasons">
+        <span class="n-val" id="nVal">First 10</span>
+        <select class="speed" id="speedSel" aria-label="Playback speed">
+          <option value="1600">0.5×</option><option value="900" selected>1×</option><option value="450">2×</option>
+        </select>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label">Playoffs</span>
+      <div class="seg" id="postSeg">
+        <button data-v="all" aria-pressed="true">Included</button>
+        <button data-v="reg" aria-pressed="false">Excluded</button>
+        <button data-v="post" aria-pressed="false">Playoffs only</button>
+        <button data-v="postnowc" aria-pressed="false">Playoffs only, no WC</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label">Rank by</span>
+      <div class="seg" id="rankSeg">
+        <button data-v="yds" aria-pressed="true">Yards</button>
+        <button data-v="td" aria-pressed="false">TDs</button>
+      </div>
+    </div>
+    <label class="chk"><input type="checkbox" id="incChk" checked> Include players who haven't reached season N yet</label>
+    <div class="pins">
+      <span class="ctl-label">Color a player</span>
+      <input type="text" id="pinName" list="playerList" placeholder="Type a name…" aria-label="Player name">
+      <datalist id="playerList"></datalist>
+      <input type="color" id="pinColor" value="#e8590c" aria-label="Dot color">
+      <button class="btn" id="pinAdd">Add</button>
+      <span id="pinChips" style="display:contents"></span>
+      <span class="hint">or click any dot</span>
+    </div>
+  </div>
+
+  <!-- Two charts -->
+  <div class="grid">
+    <div class="card" id="card-pass">
+      <h2>Passing</h2>
+      <div class="desc" id="desc-pass"></div>
+      <div class="legend"><span><i class="sw" style="background:var(--series-1)"></i>Top 10</span><span><i class="sw" style="background:var(--other)"></i>Ranks 11–25</span><span><i class="sw" style="border:2px solid var(--series-1)"></i>* Window still in progress</span><span>Colored: your picks (always shown)</span></div>
+      <div class="chart" id="chart-pass"><div class="tip"></div></div>
+      <div class="tbl-wrap"><table id="tbl-pass"></table></div>
+    </div>
+    <div class="card" id="card-total">
+      <h2>Total (pass + rush + rec)</h2>
+      <div class="desc" id="desc-total"></div>
+      <div class="legend"><span><i class="sw" style="background:var(--series-1)"></i>Top 10</span><span><i class="sw" style="background:var(--other)"></i>Ranks 11–25</span><span><i class="sw" style="border:2px solid var(--series-1)"></i>* Window still in progress</span><span>Colored: your picks (always shown)</span></div>
+      <div class="chart" id="chart-total"><div class="tip"></div></div>
+      <div class="tbl-wrap"><table id="tbl-total"></table></div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <p><b>Data:</b> 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few dozen yards per player.</p>
+    <p><b>Pre-1999:</b> Dan Marino (1983–98), Brett Favre (1991–98), Jim Kelly (full career) and the 1998 seasons of Peyton Manning and Kurt Warner are entered by hand from NFL.com, Pro Football Reference and StatMuse; their 1999+ seasons come from nflverse. Their rushing figures and a few playoff numbers are approximate. Other careers that began before 1999 (Montana, Elway, Moon, Testaverde, Gannon, etc.) aren't included.</p>
+    <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Before 1999, Marino's, Favre's and Kelly's wild-card games are split out by hand, and a few of those per-game numbers are approximate.</p>
+    <p><b>Slider:</b> goes to 23 seasons, the length of Tom Brady's career (2000–2022). A retired player whose career was shorter than N counts with his full career.</p>
+    <p><b>*</b> means the player is still active and his window includes the current <span class="curYr">2026</span> season (or one he hasn't reached yet), so his totals will keep growing.</p>
+  </div>
+</div>
+</div>
+
+<script>
+// ===== Constants =====
+let CUR = 2026;        // current season; replaced by the value in players.json on load
+const SHOW = 25;       // points plotted + rows tabled per chart
+const TOP = 10;        // highlighted in blue + labeled
+const MAXN = 23;       // slider max (Brady's career length)
+// Preset colors handed out to new picks (avoid the blue/gray already used)
+const PICK_COLORS = ['#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#1098ad', '#f08c00', '#5c7cfa', '#868e96'];
+
+// ===== UI state =====
+const state = { n: 10, mode: 'all', rank: 'yds', incl: true };
+// Which game types each Playoffs mode keeps (row type: 0 = regular, 1 = playoff, 2 = wild-card playoff)
+const MODES = { all: [0, 1, 2], reg: [0], post: [1, 2], postnowc: [1] };
+let PLAYERS = [];
+let pins = new Map();   // player name -> chosen color
+
+// Remember picks in this browser only (storage can be missing or throw)
+try { pins = new Map(JSON.parse(localStorage.getItem('qbPins') || '[]')); } catch (e) {}
+const savePins = () => { try { localStorage.setItem('qbPins', JSON.stringify([...pins])); } catch (e) {} };
+
+// ===== Aggregate one player's first n seasons =====
+// each row r = [seasonIdx, gameType, games, passTD, totalTD, passYds, totalYds]
+function agg(p) {
+  let g = 0, ptd = 0, ttd = 0, pyd = 0, tyd = 0;
+  for (const r of p.r) {
+    if (r[0] > state.n) continue;                      // outside the window
+    if (!MODES[state.mode].includes(r[1])) continue;   // game type filtered out by Playoffs mode
+    g += r[2]; ptd += r[3]; ttd += r[4]; pyd += r[5]; tyd += r[6];
+  }
+  const lastSeason = p.s + state.n - 1;                // calendar year of season N
+  if (p.last === undefined) p.last = p.s + Math.max(...p.r.map(r => r[0])) - 1;  // last season played
+  const playing = p.last === CUR;                      // has stats in the current season
+  return { name: p.n, start: p.s, end: Math.min(lastSeason, p.last), g, ptd, ttd, pyd, tyd,
+           active: playing && lastSeason >= CUR,       // window still being added to
+           notReached: playing && lastSeason > CUR,    // hasn't played season N yet
+           approx: !!p.approx };
+}
+
+// ===== Chart specs: which fields each chart uses =====
+const SPECS = {
+  pass:  { yds: 'pyd', td: 'ptd', xLabelYd: 'Passing yards', xLabelTd: 'Passing TDs', yLabelTd: 'Passing TDs per game', yLabelYd: 'Passing yards per game', tdHead: 'Pass TD', ydHead: 'Pass Yds' },
+  total: { yds: 'tyd', td: 'ttd', xLabelYd: 'Total yards', xLabelTd: 'Total TDs', yLabelTd: 'Total TDs per game', yLabelYd: 'Total yards per game', tdHead: 'Total TD', ydHead: 'Total Yds' }
+};
+
+const fmt = d3.format(',');
+const f1 = d3.format('.1f'), f2 = d3.format('.2f');
+const nameOf = d => d.name + (d.active ? '*' : '') + (d.approx ? ' ~' : '');
+const shortOf = d => nameOf(d).replace(/^(\S)\S*\s/, '$1. ');     // "P. Mahomes*"
+
+// ===== Persistent chart skeletons (built once, rebuilt on resize) =====
+const charts = {};
+const M = { t: 12, r: 18, b: 42, l: 46 };
+function setup(key) {
+  const host = d3.select('#chart-' + key);
+  host.selectAll('svg').remove();
+  const W = host.node().clientWidth, H = Math.max(280, Math.min(420, W * 0.72));
+  const svg = host.append('svg').attr('width', W).attr('height', H).attr('role', 'img');
+  const c = { host, svg, W, H, tip: host.select('.tip'),
+    gGrid: svg.append('g').attr('class', 'gridline').attr('transform', `translate(${M.l},0)`),
+    gX: svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${H - M.b})`),
+    gY: svg.append('g').attr('class', 'axis').attr('transform', `translate(${M.l},0)`),
+    xTitle: svg.append('text').attr('class', 'axis-title').attr('x', (M.l + W - M.r) / 2).attr('y', H - 6).attr('text-anchor', 'middle'),
+    yTitle: svg.append('text').attr('class', 'axis-title').attr('transform', `translate(12,${(M.t + H - M.b) / 2}) rotate(-90)`).attr('text-anchor', 'middle'),
+    gDots: svg.append('g'), gLabels: svg.append('g') };
+  // Keep moving dots inside the plot area
+  c.clipId = 'clip-' + key;
+  svg.append('clipPath').attr('id', c.clipId).append('rect').attr('x', M.l).attr('y', M.t - 8).attr('width', W - M.l - M.r + 8).attr('height', H - M.b - M.t + 16);
+  c.gDots.attr('clip-path', `url(#${c.clipId})`);
+  charts[key] = c;
+}
+
+// ===== Compute the ranked rows for one chart =====
+function rowsFor(S) {
+  const byYds = state.rank === 'yds';
+  const primary = byYds ? S.yds : S.td, secondary = byYds ? S.td : S.yds;
+  // Everyone with games in this window, ranked
+  const all = PLAYERS.map(agg).filter(d => d.g > 0 && (state.incl || !d.notReached))
+    .sort((a, b) => b[primary] - a[primary] || b[secondary] - a[secondary])
+    .map((d, i) => {
+      const ypg = d[S.yds] / d.g, tdg = d[S.td] / d.g;
+      return { ...d, rank: i + 1, yd: d[S.yds], td: d[S.td], ypg, tdg,
+               x: byYds ? d[S.yds] : d[S.td], y: byYds ? ypg : tdg,   // axes follow Rank by
+               color: pins.get(d.name) || null };
+    });
+  const top = all.slice(0, SHOW);
+  // Picked players outside the top 25 are still plotted (and listed under the table)
+  const extra = all.slice(SHOW).filter(d => d.color);
+  return { top, extra, plot: top.concat(extra), byYds };
+}
+
+// ===== Draw one chart + table (dur = transition length in ms) =====
+function draw(key, dur) {
+  const S = SPECS[key], c = charts[key];
+  const { top, extra, plot, byYds } = rowsFor(S);
+  const yLabel = byYds ? S.yLabelYd : S.yLabelTd, xLabel = byYds ? S.xLabelYd : S.xLabelTd;
+  d3.select('#desc-' + key).text(`${xLabel} (x) vs. ${yLabel.replace(/^\w/, ch => ch.toLowerCase())} (y)`);
+  c.svg.attr('aria-label', `${xLabel} vs ${yLabel}, first ${state.n} seasons`);
+  const { W, H } = c;
+  const t = c.svg.transition().duration(dur).ease(d3.easeCubicInOut);
+
+  // --- Scales padded around the plotted data ---
+  const xe = d3.extent(plot, d => d.x);
+  const xp = (xe[1] - xe[0]) * 0.08 || (byYds ? 100 : 2);
+  const x = d3.scaleLinear().domain([Math.max(0, xe[0] - xp), xe[1] + xp]).nice().range([M.l, W - M.r]);
+  // y fits the dots shown at the current season count (rescales as the slider moves)
+  const ye = d3.extent(plot, d => d.y), ypad = (ye[1] - ye[0]) * 0.12 || (byYds ? 5 : 0.1);
+  const Y_WINDOW = [Math.max(0, ye[0] - ypad), ye[1] + ypad];
+  const y = d3.scaleLinear().domain(Y_WINDOW).nice().range([H - M.b, M.t]);
+  const inWin = d => d.y >= Y_WINDOW[0] && d.y <= Y_WINDOW[1];     // dots outside are clipped
+
+  // --- Axes + grid glide to the new scales ---
+  c.gGrid.transition(t).call(d3.axisLeft(y).ticks(5).tickSize(-(W - M.l - M.r)).tickFormat(''));
+  c.gX.transition(t).call(d3.axisBottom(x).ticks(Math.max(3, Math.floor(W / 110))).tickFormat(byYds ? d3.format('~s') : d3.format('d')));
+  c.gY.transition(t).call(d3.axisLeft(y).ticks(5).tickFormat(byYds ? d3.format('.0f') : f2));
+  c.xTitle.text(xLabel); c.yTitle.text(yLabel);
+
+  // --- Dot styling: picked color > top-10 blue > gray; hollow ring = window in progress ---
+  const base = d => d.color || (d.rank <= TOP ? 'var(--series-1)' : 'var(--other)');
+  const fill = d => d.active ? 'var(--surface-1)' : base(d);
+  const stroke = d => d.active ? base(d) : 'var(--surface-1)';
+  const radius = d => d.color ? 7 : d.rank <= TOP ? 6 : 4.5;
+  // Paint order: gray, then blue, then picks on top
+  const z = d => d.color ? 2 : d.rank <= TOP ? 1 : 0;
+  const ordered = plot.slice().sort((a, b) => z(a) - z(b) || b.rank - a.rank);
+
+  // --- Keyed join by player so each dot glides between seasons ---
+  c.gDots.selectAll('circle').data(ordered, d => d.name).join(
+    enter => enter.append('circle').attr('class', 'pt')
+      .attr('cx', d => x(d.x)).attr('cy', d => y(d.y)).attr('r', 0)
+      .call(e => e.transition(t).attr('r', radius)),
+    update => update,
+    exit => exit.call(e => e.transition(t).attr('r', 0).remove())
+  )
+    .on('pointerenter pointermove', (ev, d) => showTip(ev, d, c, S))
+    .on('pointerleave', () => c.tip.style('opacity', 0))
+    .on('click', (ev, d) => togglePin(d.name))
+    .order()
+    .transition(t)
+    .attr('cx', d => x(d.x)).attr('cy', d => y(d.y)).attr('r', radius)
+    .attr('fill', fill).attr('stroke', stroke).attr('stroke-width', d => d.active ? 2.2 : 2);
+
+  // --- Direct labels: picks first, then top 10 ---
+  // Try right, left, above, below; keep the first spot inside the plot that overlaps
+  // neither an earlier label nor any dot (final positions). Unplaced names stay in the table.
+  const placed = [], labels = [];
+  const dots = plot.map(d => [x(d.x) - 6, y(d.y) - 6, x(d.x) + 6, y(d.y) + 6]);
+  const hit = (a, b) => !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]);
+  const want = plot.filter(d => d.color).concat(top.filter(d => d.rank <= TOP && !d.color)).filter(inWin);
+  want.forEach(d => {
+    const txt = shortOf(d), w = txt.length * 6.1, h = 12, px = x(d.x), py = y(d.y);
+    const cands = [
+      [[px + 9, py - 8, px + 9 + w, py + 4], px + 9, py + 4, 'start'],
+      [[px - 9 - w, py - 8, px - 9, py + 4], px - 9, py + 4, 'end'],
+      [[px - w / 2, py - 10 - h, px + w / 2, py - 10], px, py - 11, 'middle'],
+      [[px - w / 2, py + 9, px + w / 2, py + 9 + h], px, py + 19, 'middle']];
+    for (const [box, tx, ty, anchor] of cands) {
+      if (box[0] < M.l || box[2] > W - M.r || box[1] < 0 || box[3] > H - M.b) continue;
+      if (placed.some(b => hit(box, b)) || dots.some(b => hit(box, b))) continue;
+      placed.push(box); labels.push({ name: d.name, txt, tx, ty, anchor, color: d.color });
+      break;
+    }
+  });
+  c.gLabels.selectAll('text').data(labels, d => d.name).join(
+    enter => enter.append('text').attr('class', 'lbl').attr('opacity', 0)
+      .attr('x', d => d.tx).attr('y', d => d.ty),
+    update => update,
+    exit => exit.transition(t).attr('opacity', 0).remove()
+  )
+    .attr('text-anchor', d => d.anchor).text(d => d.txt)
+    .transition(t).attr('opacity', 1).attr('x', d => d.tx).attr('y', d => d.ty);
+
+  // --- Table: all 25, plus picks ranked lower ---
+  const tbl = d3.select('#tbl-' + key);
+  tbl.selectAll('*').remove();
+  const heads = ['#', 'Player', 'G', S.ydHead, 'YPG', S.tdHead, 'TD/G'];
+  tbl.append('thead').append('tr').selectAll('th').data(heads).join('th').text(h => h);
+  const shortNames = c.host.node().clientWidth < 440;          // phones: "P. Mahomes"
+  const tr = tbl.append('tbody').selectAll('tr').data(top.concat(extra)).join('tr')
+    .classed('out', d => d.rank > SHOW)
+    .classed('sep', (d, i) => i === SHOW);                      // divider before picks below 25
+  tr.append('td').text(d => d.rank);
+  const nameTd = tr.append('td');
+  nameTd.filter(d => d.color).append('i').attr('class', 'tsw').style('background', d => d.color);
+  nameTd.append('span').text(d => shortNames ? shortOf(d) : nameOf(d));
+  tr.append('td').text(d => d.g);
+  tr.append('td').classed('sortcol', byYds).text(d => fmt(d.yd));
+  tr.append('td').text(d => f1(d.ypg));
+  tr.append('td').classed('sortcol', !byYds).text(d => d.td);
+  tr.append('td').text(d => f2(d.tdg));
+}
+
+// ===== Tooltip, clamped inside the chart box =====
+function showTip(ev, d, c, S) {
+  const span = d.start === d.end ? `${d.start}` : `${d.start}–${d.end}`;
+  c.tip.html('');
+  c.tip.append('b').text(`#${d.rank} ${nameOf(d)}`);
+  [['Seasons', span], ['Games', d.g], [S.ydHead, fmt(d.yd)], ['Yds/game', f1(d.ypg)], [S.tdHead, d.td], ['TD/game', f2(d.tdg)]]
+    .forEach(([k, v]) => { const r = c.tip.append('div').attr('class', 'row'); r.append('span').text(k); r.append('span').text(v); });
+  c.tip.append('div').attr('class', 'row').append('span').text(pins.has(d.name) ? 'Click to remove color' : 'Click to color this player');
+  const [px, py] = d3.pointer(ev, c.host.node());
+  const tw = c.tip.node().offsetWidth, th = c.tip.node().offsetHeight;
+  let left = px + 14, top = py - th - 10;
+  if (left + tw > c.W) left = px - tw - 14;   // flip left near the edge
+  if (top < 0) top = py + 14;                 // drop below near the top
+  c.tip.style('left', Math.max(0, left) + 'px').style('top', top + 'px').style('opacity', 1);
+}
+
+// ===== Render both charts =====
+function render(dur = 450) {
+  d3.select('#nVal').text(state.n === 1 ? 'Rookie year' : state.n === MAXN ? `First ${MAXN} (Brady max)` : `First ${state.n}`);
+  d3.select('#nSub').text(state.n); d3.select('#nPl').text(state.n === 1 ? '' : 's');
+  d3.select('#nSlider').property('value', state.n);
+  draw('pass', dur); draw('total', dur);
+}
+
+// ===== Player color picks =====
+function nextColor() { return PICK_COLORS.find(col => ![...pins.values()].includes(col)) || PICK_COLORS[pins.size % PICK_COLORS.length]; }
+function renderChips() {
+  const chips = d3.select('#pinChips').selectAll('.chip').data([...pins], d => d[0]).join(enter => {
+    const ch = enter.append('span').attr('class', 'chip');
+    ch.append('i'); ch.append('span').attr('class', 'nm');
+    ch.append('button').attr('aria-label', 'Remove').html('&times;');
+    return ch;
+  });
+  chips.select('i').style('background', d => d[1]);
+  chips.select('.nm').text(d => d[0]);
+  chips.select('button').on('click', (ev, d) => { pins.delete(d[0]); savePins(); renderChips(); render(); });
+  d3.select('#pinColor').property('value', nextColor());   // suggest the next unused color
+}
+function togglePin(name) {
+  if (pins.has(name)) pins.delete(name); else pins.set(name, nextColor());
+  savePins(); renderChips(); render();
+}
+function addPinFromInput() {
+  const typed = d3.select('#pinName').property('value').trim().toLowerCase();
+  if (!typed) return;
+  // Exact match first, then the first name that contains what was typed
+  const p = PLAYERS.find(q => q.n.toLowerCase() === typed) || PLAYERS.find(q => q.n.toLowerCase().includes(typed));
+  if (!p) { d3.select('#pinName').property('value', '').attr('placeholder', 'No match — try again'); return; }
+  pins.set(p.n, d3.select('#pinColor').property('value'));   // set or recolor
+  d3.select('#pinName').property('value', '').attr('placeholder', 'Type a name…');
+  savePins(); renderChips(); render();
+}
+d3.select('#pinAdd').on('click', addPinFromInput);
+d3.select('#pinName').on('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addPinFromInput(); } });
+
+// ===== Play / pause: steps the slider like a video =====
+let timer = null;
+const stepMs = () => +d3.select('#speedSel').property('value');
+function setPlaying(on) {
+  d3.select('#playBtn').html(on ? '&#10074;&#10074;' : '&#9654;').attr('aria-label', on ? 'Pause' : 'Play');
+  if (!on) { clearInterval(timer); timer = null; }
+}
+function tick() {
+  if (state.n >= MAXN) { setPlaying(false); return; }   // stop at the end
+  state.n += 1;
+  render(stepMs() * 0.85);                               // glide most of the step
+}
+function play() {
+  if (state.n >= MAXN) { state.n = 1; render(300); }     // restart from rookie year
+  setPlaying(true);
+  timer = setInterval(tick, stepMs());
+}
+d3.select('#playBtn').on('click', () => timer ? setPlaying(false) : play());
+d3.select('#speedSel').on('change', () => { if (timer) { clearInterval(timer); timer = setInterval(tick, stepMs()); } });
+
+// ===== Other controls =====
+d3.select('#nSlider').on('input', function () { setPlaying(false); state.n = +this.value; render(250); });
+function seg(id, keyName, parse) {
+  d3.selectAll(`#${id} button`).on('click', function () {
+    d3.selectAll(`#${id} button`).attr('aria-pressed', 'false');
+    d3.select(this).attr('aria-pressed', 'true');
+    state[keyName] = parse(this.dataset.v); render();
+  });
+}
+seg('postSeg', 'mode', v => v);
+seg('rankSeg', 'rank', v => v);
+d3.select('#incChk').on('change', function () { state.incl = this.checked; render(); });
+let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { setup('pass'); setup('total'); render(0); }, 120); });
+
+// ===== Load data =====
+fetch('players.json').then(r => r.json()).then(d => {
+  // players.json = { meta: {season, through}, players: [...] }
+  PLAYERS = d.players;
+  CUR = d.meta.season;
+  d3.selectAll('.curYr').text(CUR);
+  d3.select('#through').text(d.meta.through);
+  // Autocomplete list of every player in the data
+  d3.select('#playerList').selectAll('option').data(PLAYERS.map(p => p.n).sort()).join('option').attr('value', n => n);
+  setup('pass'); setup('total'); renderChips(); render(0);
+}).catch(() => d3.select('.sub').text('Could not load the player data.'));
+</script>
+</body>
+</html>
