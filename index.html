@@ -200,6 +200,8 @@
     </div>
   </div>
 
+  <p class="hint" id="roHint" hidden></p>
+
   <!-- Two charts (contents set by the active tab) -->
   <div class="grid">
     <div class="card" id="card-a">
@@ -219,21 +221,19 @@
   </div>
 
   <div class="notes">
-    <p><b>Data:</b> 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Click any table header to sort by it; click again to flip the order. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few dozen yards per player.</p>
+    <p><b>Data:</b> 1970–1998 regular seasons from <a href="https://github.com/fantasydatapros/data">fantasydatapros</a> (Pro Football Reference season totals, cross-checked against nflverse and NFL.com). 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Click any table header to sort by it; click again to flip the order. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few yards per player. Three 1999–2000 games missing from nflverse (Rams–Ravens, Chiefs–Chargers, Bills–Dolphins) are filled in from the season totals.</p>
+    <p><b>Careers before 1999:</b> only regular-season totals exist, so those players appear only with Playoffs set to <i>Excluded</i> and the slider on <i>Seasons</i>. Exceptions: Dan Marino, Brett Favre and Jim Kelly (playoff games entered by hand; a few per-round splits approximate) and Peyton Manning and Kurt Warner (no playoff games before 1999) appear in every view; in Games mode their pre-1999 seasons are spread evenly across their games. Careers that began before 1970 (e.g. Johnny Unitas, Jim Brown) aren't included.</p>
     <div class="tabnote" data-for="qb">
-    <p><b>Pre-1999:</b> Dan Marino (1983–98), Brett Favre (1991–98), Jim Kelly (full career) and the 1998 seasons of Peyton Manning and Kurt Warner are entered by hand from NFL.com, Pro Football Reference and StatMuse; their 1999+ seasons come from nflverse. Their rushing figures and a few playoff numbers are approximate. Other careers that began before 1999 (Montana, Elway, Moon, Testaverde, Gannon, etc.) aren't included.</p>
+    <p><b>Quarterbacks tab:</b> the Total chart includes every player with enough yards, at any position.</p>
     </div>
     <div class="tabnote" data-for="rb" hidden>
-    <p><b>Running backs:</b> players whose most-listed position is RB. YPC = rushing yards per carry. Only careers that began in 1999 or later are included, so Emmitt Smith, Barry Sanders, Marshall Faulk, Curtis Martin, Jerome Bettis and other earlier backs aren't in this tab. Two players who share a name show their rookie year, e.g. Adrian Peterson (2007).</p>
+    <p><b>Running backs:</b> players whose most-listed position is RB. YPC = rushing yards per carry. Two players who share a name show their rookie year, e.g. Adrian Peterson (2007).</p>
     </div>
     <div class="tabnote" data-for="wr" hidden>
-    <p><b>Wide receivers:</b> players whose most-listed position is WR (tight ends aren't included). Y/R = receiving yards per catch. Only careers that began in 1999 or later are included, so Jerry Rice, Tim Brown, Cris Carter, Isaac Bruce and other earlier receivers aren't in this tab.</p>
+    <p><b>Wide receivers:</b> players whose most-listed position is WR (tight ends aren't included). Y/R = receiving yards per catch.</p>
     </div>
     <div class="tabnote" data-for="te" hidden>
-    <p><b>Tight ends:</b> players whose most-listed position is TE; receiving stats only. Y/R = receiving yards per catch. Only careers that began in 1999 or later are included, so Tony Gonzalez (1997), Shannon Sharpe, Ozzie Newsome and other earlier tight ends aren't in this tab.</p>
-    </div>
-    <div class="tabnote" data-for="qb">
-    <p><b>Games slider, pre-1999 seasons:</b> only season totals exist for Marino, Favre, Kelly and Manning's and Warner's 1998 seasons, so in Games mode each of those seasons is spread evenly across its games.</p>
+    <p><b>Tight ends:</b> players whose most-listed position is TE; receiving stats only. Y/R = receiving yards per catch.</p>
     </div>
     <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Before 1999, Marino's, Favre's and Kelly's wild-card games are split out by hand, and a few of those per-game numbers are approximate.</p>
     <p><b>Slider:</b> <span id="sliderNote"></span> A retired player whose career was shorter than N counts with his full career.</p>
@@ -310,6 +310,11 @@ TABS.te = { ...TABS.wr, list: 'tes', title: 'Tight ends' };
 const TAB_KEYS = Object.keys(TABS);
 const slotKeys = () => Object.keys(tab().slots);   // ['a'] or ['a', 'b']
 const tab = () => TABS[state.tab];
+
+// Players with only regular-season totals before 1999 (p.ro) are complete only with
+// Playoffs: Excluded and the slider on Seasons; elsewhere they're left out.
+const roView = () => state.mode === 'reg' && state.unit === 'seasons';
+const showable = p => !p.ro || roView();
 
 // ===== Aggregate one player's first n seasons, or first n games =====
 function agg(p) {
@@ -388,7 +393,7 @@ function rowsFor(S) {
   const byYds = state.rank === 'yds';
   const primary = byYds ? S.yds : S.td, secondary = byYds ? S.td : S.yds;
   // Everyone with games in this window, ranked
-  const all = PLAYERS.map(agg).filter(d => d.g > 0 && (state.incl || !d.notReached))
+  const all = PLAYERS.filter(showable).map(agg).filter(d => d.g > 0 && (state.incl || !d.notReached))
     .sort((a, b) => b[primary] - a[primary] || b[secondary] - a[secondary])
     .map((d, i) => {
       const ypg = d[S.yds] / d.g, tdg = d[S.td] / d.g;
@@ -572,6 +577,10 @@ function render(dur = 450) {
   d3.select('#incTxt').text(g ? "Include players who haven't played N games yet" : "Include players who haven't reached season N yet");
   d3.select('#nSlider').attr('max', max).property('value', n);
   slotKeys().forEach(k => draw(k, dur));
+  // Tell the reader when older careers are being left out of this view
+  const hidden = roView() ? 0 : PLAYERS.filter(p => p.ro).length;
+  d3.select('#roHint').property('hidden', !hidden)
+    .text(hidden ? `${hidden} players whose careers began before 1999 are hidden in this view (only their regular-season totals exist). Set Playoffs to Excluded and the slider to Seasons to include them.` : '');
 }
 
 // ===== Player color picks =====
@@ -689,7 +698,7 @@ function computeMax(t) {
 function computeMaxGames(t) {
   const T = TABS[t], list = DATA[T.list];
   const yi = T.fields.indexOf(T.slots.a.yds) + 2;
-  const best = list.map(p => ({ p, yds: p.r.reduce((s, r) => s + r[yi], 0), games: (p.gm || []).length }))
+  const best = list.filter(p => !p.ro).map(p => ({ p, yds: p.r.reduce((s, r) => s + r[yi], 0), games: (p.gm || []).length }))
     .sort((a, b) => b.yds - a.yds).slice(0, LEADERS)
     .sort((a, b) => b.games - a.games || b.yds - a.yds)[0];
   T.maxG = best.games;

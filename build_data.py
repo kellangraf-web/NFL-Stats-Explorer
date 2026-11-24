@@ -12,6 +12,7 @@ Run:  python build_data.py        (writes players.json next to this file)
 import datetime as dt
 import io
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -56,7 +57,7 @@ def fetch_parquet(url, tries=4):
 
 def load_weekly(cur):
     """Stack every season's weekly player stats, 1999 -> cur."""
-    cols = ["player_id", "player_display_name", "position", "season", "week", "season_type",
+    cols = ["player_id", "player_display_name", "position", "team", "season", "week", "season_type",
             "passing_tds", "rushing_tds", "receiving_tds",
             "passing_yards", "rushing_yards", "receiving_yards", "carries", "receptions"]
     frames = []
@@ -70,76 +71,194 @@ def load_weekly(cur):
     wk = pd.concat(frames, ignore_index=True)
     # Regular season + playoffs only (preseason is excluded)
     wk = wk[wk.season_type.isin(["REG", "POST"])]
-    num = wk.columns.drop(["player_id", "player_display_name", "position", "season_type"])
+    num = wk.columns.drop(["player_id", "player_display_name", "position", "team", "season_type"])
     wk[num] = wk[num].fillna(0)            # missing stat = 0
     wk["position"] = wk["position"].fillna("")
+    wk["gcount"] = 1                       # each nflverse row is one game
+    wk["src"] = "nv"
     return wk
 
 
 # ---------------------------------------------------------------------------
-# 3. Build per-player, per-season rows
+# 3. Seasons before 1999: fantasydatapros regular-season totals (1970-2000)
+#    Snapshot in data/; verified against nflverse (1999-2021, ~99% exact) and NFL.com.
+# ---------------------------------------------------------------------------
+HIST = Path(__file__).with_name("data") / "fdp_regular_season_1970_2000.csv"
+STAT_MAP = {  # fantasydatapros column -> nflverse column
+    "pass_yds": "passing_yards", "pass_td": "passing_tds", "rush_att": "carries",
+    "rush_yds": "rushing_yards", "rush_td": "rushing_tds", "rec": "receptions",
+    "rec_yds": "receiving_yards", "rec_td": "receiving_tds"}
+
+# Regular-season games missing from nflverse (found by checking every team has 16 weeks)
+MISSING_GAMES = [(1999, 1, {"LA", "BAL"}),     # Rams vs Ravens
+                 (2000, 3, {"KC", "LAC"}),     # Chiefs vs Chargers
+                 (2000, 6, {"BUF", "MIA"})]    # Bills vs Dolphins
+
+
+def norm(name):
+    """Name key for matching across sources: lowercase, no punctuation or Jr./Sr./II/III."""
+    n = re.sub(r"[^a-z ]", "", str(name).lower())
+    return " ".join(re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", n).split())
+
+
+def load_hist():
+    h = pd.read_csv(HIST)
+    h["key"] = h.player.map(norm)
+    return h
+
+
+def patch_missing_games(wk, hist):
+    """Add each missing game as one extra row per player: fdp season total minus nflverse total."""
+    add = []
+    for season, week, teams in MISSING_GAMES:
+        f = hist[hist.season == season].groupby("key")[list(STAT_MAP)].sum()
+        reg = wk[(wk.season == season) & (wk.season_type == "REG")]
+        on_team = reg[reg.team.isin(teams)].player_id.unique()
+        tot = reg[reg.player_id.isin(on_team)].groupby(["player_id", "player_display_name", "position"])[
+            list(STAT_MAP.values())].sum().reset_index()
+        for r in tot.itertuples():
+            k = norm(r.player_display_name)
+            if k not in f.index:
+                continue
+            diff = {nv: int(f.loc[k, fd]) - int(getattr(r, nv)) for fd, nv in STAT_MAP.items()}
+            # A real missing game shows up as extra attempts/catches or clearly more yards;
+            # keep the raw differences (a lost-yardage run can make one of them negative)
+            plays = diff["carries"] + diff["receptions"]
+            yards = diff["passing_yards"] + diff["rushing_yards"] + diff["receiving_yards"]
+            if plays > 0 or yards >= 10 or diff["passing_tds"] > 0:
+                add.append({"player_id": r.player_id, "player_display_name": r.player_display_name,
+                            "position": r.position, "team": "", "season": season, "week": week,
+                            "season_type": "REG", "passing_tds": diff["passing_tds"], "rushing_tds": diff["rushing_tds"],
+                            "receiving_tds": diff["receiving_tds"], "passing_yards": diff["passing_yards"],
+                            "rushing_yards": diff["rushing_yards"], "receiving_yards": diff["receiving_yards"],
+                            "carries": diff["carries"], "receptions": diff["receptions"], "gcount": 1, "src": "nv"})
+    print(f"  patched {len(add)} player-games missing from nflverse (1999-2000)")
+    return pd.concat([wk, pd.DataFrame(add)], ignore_index=True)
+
+
+def hist_players(hist):
+    """One career per (name key, unbroken run of seasons), 1970-1998, with first season and position."""
+    h = hist[hist.season <= 1998].sort_values("season").copy()
+    # A gap of 3+ seasons under one name = a different player with the same name
+    h["run"] = h.groupby("key").season.transform(lambda s: (s.diff() > 3).cumsum())
+    h["hid"] = h.key + "#" + h.run.astype(str)
+    car = h.groupby("hid").agg(name=("player", "first"), key=("key", "first"), first=("season", "min"),
+                               last=("season", "max"), age0=("age", "first"),
+                               pos=("pos", lambda s: s.mode().iat[0]))
+    # Careers already underway in 1970 would be incomplete: drop 1970 players aged 25+
+    car = car[~((car["first"] == 1970) & (car.age0 >= 25))]
+    return h[h.hid.isin(car.index)], car
+
+
+# ---------------------------------------------------------------------------
+# 4. Build per-player, per-season rows
 # ---------------------------------------------------------------------------
 def build():
     cur = current_season()
     print(f"Current season: {cur}")
     wk = load_weekly(cur)
+    hist = load_hist()
+    wk = patch_missing_games(wk, hist)
 
-    # --- Career start = earliest of rookie season, draft year, first game in data ---
+    # --- nflverse career start = earliest of rookie season, draft year, first game in data ---
     pl = fetch_parquet(f"{BASE}/players/players.parquet")[["gsis_id", "rookie_season", "draft_year"]]
     first_seen = wk.groupby("player_id").season.min().rename("first_seen")
     wk = wk.merge(pl, left_on="player_id", right_on="gsis_id", how="left").merge(first_seen, on="player_id")
     wk["start"] = wk[["rookie_season", "draft_year", "first_seen"]].min(axis=1)
 
-    # Careers that began before 1999: fix the start year; seasons before 1999 are added by hand below
-    START = {"Peyton Manning": 1998, "Kurt Warner": 1998, "Brett Favre": 1991, "Dan Marino": 1983}
-    wk["start"] = wk.player_display_name.map(START).fillna(wk.start)
-    # Any other pre-1999 career would be incomplete, so leave it out
-    wk = wk[(wk.start >= 1999) | wk.player_display_name.isin(START.keys())]
+    # --- Link pre-1999 careers to the same player's 1999+ nflverse seasons ---
+    h, car = hist_players(hist)
+    nv_car = wk.groupby("player_id").agg(name=("player_display_name", "first"), start=("start", "min"),
+                                         first_seen=("first_seen", "first"))
+    nv_car["key"] = nv_car.name.map(norm)
+    # Candidates: nflverse players already playing in 1999-2000 whose careers began before 1999
+    cand = nv_car[(nv_car.first_seen <= 2000) & (nv_car.start < 1999)]
+    link = {}                                   # hist id -> nflverse player_id
+    for hid, c in car[car["last"] >= 1997].iterrows():
+        m = cand[cand.key == c.key]
+        if len(m) == 1:
+            link[hid] = m.index[0]
+    print(f"  pre-1999 careers: {len(car):,}; linked to their 1999+ seasons: {len(link):,}")
+
+    # Linked players: their nflverse career starts at the first fdp season
+    start_of = {link[hid]: int(car.loc[hid, "first"]) for hid in link}
+    wk["start"] = wk.player_id.map(start_of).fillna(wk.start)
+    # Other pre-1999 nflverse careers can't be completed, so leave them out
+    wk = wk[(wk.start >= 1999) | wk.player_id.isin(start_of.keys())]
+
+    # --- fdp seasons as rows in the same layout (one row = one season, gcount = games) ---
+    hr = h.copy()
+    hr["player_id"] = hr.hid.map(link).fillna("H:" + hr.hid)
+    names = wk.groupby("player_id").player_display_name.first()
+    hr["player_display_name"] = hr.player_id.map(names).fillna(hr.player)
+    hr["position"] = hr.pos
+    hr["start"] = hr.hid.map(car["first"])
+    hr = hr.rename(columns={k: v for k, v in STAT_MAP.items()}).assign(
+        week=0, season_type="REG", gcount=hr.g, src="hist", team=hr.team)
+    hr = hr[[c for c in wk.columns if c in hr.columns]]
+
+    # --- Hand-entered playoff games for pre-1999 seasons (fdp has no playoffs) ---
+    hand = hand_playoffs()
+    # Attach each hand row to that player's id (Kelly's comes from his fdp seasons)
+    ids = pd.concat([hr[["player_display_name", "player_id"]], wk[["player_display_name", "player_id"]]]) \
+        .drop_duplicates("player_display_name").set_index("player_display_name").player_id
+    hand["player_id"] = hand.player_display_name.map(ids)
+    rows = pd.concat([wk, hr, hand], ignore_index=True)
+    # Players whose pre-1999 seasons have complete playoff data (or no playoff games then)
+    COMPLETE = {"Dan Marino", "Brett Favre", "Jim Kelly", "Peyton Manning", "Kurt Warner"}
+    hand_ids = {pid for pid, nm in rows.groupby("player_id").player_display_name.first().items() if nm in COMPLETE}
+    rows["start"] = rows.groupby("player_id").start.transform("min")
+    for c in ["passing_tds", "rushing_tds", "receiving_tds", "passing_yards", "rushing_yards",
+              "receiving_yards", "carries", "receptions"]:
+        rows[c] = rows[c].fillna(0)
 
     # --- Season index within the career (1 = rookie year) ---
-    wk["k"] = (wk.season - wk.start + 1).astype(int)
-    wk = wk[wk.k <= MAXK]
+    rows["k"] = (rows.season - rows.start + 1).astype(int)
+    rows = rows[rows.k <= MAXK]
 
     # --- Game type: 0 = regular season, 1 = playoff, 2 = wild-card playoff ---
-    # The wild-card round is the first playoff week of each season.
-    wc_week = wk[wk.season_type == "POST"].groupby("season").week.min()
-    wk["pt"] = 0
-    wk.loc[wk.season_type == "POST", "pt"] = 1
-    wk.loc[(wk.season_type == "POST") & (wk.week == wk.season.map(wc_week)), "pt"] = 2
+    wc_week = rows[(rows.season_type == "POST") & (rows.src == "nv")].groupby("season").week.min()
+    if "pt" not in rows: rows["pt"] = None
+    nvpost = (rows.season_type == "POST") & (rows.src == "nv")
+    rows.loc[rows.season_type == "REG", "pt"] = 0
+    rows.loc[nvpost, "pt"] = 1
+    rows.loc[nvpost & (rows.week == rows.season.map(wc_week)), "pt"] = 2
+    rows["pt"] = rows.pt.astype(int)
 
-    # --- Totals: total TDs / yards = passing + rushing + receiving ---
-    wk["ttd"] = wk.passing_tds + wk.rushing_tds + wk.receiving_tds
-    wk["tyd"] = wk.passing_yards + wk.rushing_yards + wk.receiving_yards
-    wk["syd"] = wk.rushing_yards + wk.receiving_yards          # scrimmage yards (RB filter)
+    # --- Totals ---
+    rows["ttd"] = rows.passing_tds + rows.rushing_tds + rows.receiving_tds
+    rows["tyd"] = rows.passing_yards + rows.rushing_yards + rows.receiving_yards
+    rows["syd"] = rows.rushing_yards + rows.receiving_yards
 
-    # --- Primary position = the position a player is listed at most often ---
-    pos = wk[wk.position != ""].groupby("player_id").position.agg(lambda x: x.mode().iat[0])
-    modern = wk.start >= 1999                                  # complete careers only
+    # Regular-season-only players: have pre-1999 seasons without playoff data
+    ro_ids = set(rows[rows.src == "hist"].player_id) - hand_ids
+    # Primary position: fdp's for players with pre-1999 seasons, else nflverse's most listed
+    pos = rows[rows.position.fillna("") != ""].assign(h=rows.src.eq("hist")).sort_values("h", ascending=False) \
+        .groupby("player_id").apply(lambda g: g[g.h].position.mode().iat[0] if g.h.any() else g.position.mode().iat[0])
 
-    # Each group: who's in it, which stats (output name -> source column), and a size filter
-    qb, qb_games = build_group(wk, wk.index == wk.index,
+    ctx = dict(ro_ids=ro_ids, approx_ids={pid for pid in hand_ids
+              if rows[rows.player_id == pid].player_display_name.iat[0] in {"Dan Marino", "Brett Favre", "Jim Kelly"}})
+    by_pos = lambda p: rows.player_id.map(pos).eq(p)
+    qb, qb_games = build_group(rows, rows.index == rows.index,
         [("ptd", "passing_tds"), ("ttd", "ttd"), ("pyd", "passing_yards"), ("tyd", "tyd")],
-        keep_col="tyd", total_min=5000, season_min=1500)
-    add_hand_entered(qb, qb_games)
-    rb, rb_games = build_group(wk, modern & wk.player_id.map(pos).eq("RB"),
+        keep_col="tyd", total_min=5000, season_min=1500, **ctx)
+    rb, rb_games = build_group(rows, by_pos("RB"),
         [("att", "carries"), ("ryd", "rushing_yards"), ("rtd", "rushing_tds"),
          ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
-        keep_col="syd", total_min=3000, season_min=800)
-    wr, wr_games = build_group(wk, modern & wk.player_id.map(pos).eq("WR"),
+        keep_col="syd", total_min=3000, season_min=800, **ctx)
+    wr, wr_games = build_group(rows, by_pos("WR"),
         [("rec", "receptions"), ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
-        keep_col="receiving_yards", total_min=3000, season_min=800)
+        keep_col="receiving_yards", total_min=3000, season_min=800, **ctx)
     # Tight ends: same receiving stats as WRs, lower size filter (TEs catch fewer yards)
-    te, te_games = build_group(wk, modern & wk.player_id.map(pos).eq("TE"),
+    te, te_games = build_group(rows, by_pos("TE"),
         [("rec", "receptions"), ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
-        keep_col="receiving_yards", total_min=2000, season_min=500)
-    finalize_games(rb_games); finalize_games(wr_games); finalize_games(te_games)          # (QB list finalized with hand data)
+        keep_col="receiving_yards", total_min=2000, season_min=500, **ctx)
 
     # --- Label for "data through": last week with games in the current season ---
     cur_rows = wk[wk.season == cur]
     if len(cur_rows):
         last = cur_rows.sort_values(["week"]).iloc[-1]
-        through = (f"Week {int(last.week)}" if last.season_type == "REG"
-                   else "the playoffs")
+        through = f"Week {int(last.week)}" if last.season_type == "REG" else "the playoffs"
     else:
         through = "the start of the season"
 
@@ -147,18 +266,21 @@ def build():
     OUT.write_text(json.dumps(out, separators=(",", ":")))
     games = {"players": qb_games, "rbs": rb_games, "wrs": wr_games, "tes": te_games}
     OUT_GAMES.write_text(json.dumps(games, separators=(",", ":")))
-    print(f"Wrote {OUT.name}: {len(qb)} QB-list, {len(rb)} RBs, {len(wr)} WRs, {len(te)} TEs; "
-          f"{OUT_GAMES.name}; {cur} data through {through}")
+    n_ro = sum(1 for lst in (qb, rb, wr, te) for p in lst if p.get("ro"))
+    print(f"Wrote {OUT.name}: {len(qb)} QB-list, {len(rb)} RBs, {len(wr)} WRs, {len(te)} TEs "
+          f"({n_ro} list entries regular-season only); {OUT_GAMES.name}; {cur} data through {through}")
 
 
-def build_group(wk, mask, stats, keep_col, total_min, season_min):
+def build_group(rows, mask, stats, keep_col, total_min, season_min, ro_ids, approx_ids):
     """Per-season rows and per-game rows for one group of players.
 
     Season row: [season#, gameType, G, stat1, stat2, ...]
     Game row:   [season#, gameType, stat1, stat2, ...]   (chronological)
     gameType: 0 = regular season, 1 = playoff, 2 = wild-card playoff.
+    ro = only regular-season data before 1999 (the page shows these players only with
+    Playoffs: Excluded and the slider in Seasons).
     """
-    w = wk[mask]
+    w = rows[mask]
     # Keep players who could plausibly chart: enough total yards, or one big season
     tot = w.groupby("player_id")[keep_col].sum()
     best = w.groupby(["player_id", "k"])[keep_col].sum().groupby("player_id").max()
@@ -166,36 +288,45 @@ def build_group(wk, mask, stats, keep_col, total_min, season_min):
     w = w[w.player_id.isin(keep)]
     names = [n for n, _ in stats]
 
-    # Season totals
-    agg = w.groupby(["player_id", "player_display_name", "start", "k", "pt"]).agg(
-        g=("week", "size"), **{n: (src, "sum") for n, src in stats}).reset_index()
+    # Season totals (games = sum of gcount: 1 per nflverse game, G per fdp/hand season row)
+    agg = w.groupby(["player_id", "k", "pt"]).agg(
+        g=("gcount", "sum"), **{n: (src, "sum") for n, src in stats}).reset_index()
+    info = w.groupby("player_id").agg(name=("player_display_name", "first"), start=("start", "min"))
     seasons = []
-    for (pid, name, start), grp in agg.groupby(["player_id", "player_display_name", "start"]):
-        rows = [[int(r.k), int(r.pt), int(r.g)] + [int(getattr(r, n)) for n in names]
-                for r in grp.itertuples()]
-        seasons.append({"id": pid, "n": name, "s": int(start), "r": rows})
+    for pid, grp in agg.groupby("player_id"):
+        rec = {"id": pid, "n": info.loc[pid, "name"], "s": int(info.loc[pid, "start"]),
+               "r": [[int(r.k), int(r.pt), int(r.g)] + [int(getattr(r, n)) for n in names]
+                     for r in grp.itertuples()]}
+        if pid in ro_ids: rec["ro"] = 1
+        if pid in approx_ids: rec["approx"] = 1
+        seasons.append(rec)
 
-    # Per-game rows, oldest first (o = sort key within a season)
-    w = w.sort_values(["season", "week"])
+    # Per-game rows, oldest first. nflverse rows are single games; season rows for the
+    # complete pre-1999 players are spread evenly across their games (approximate).
     games = {}
-    for pid, grp in w.groupby("player_id", sort=False):
-        games[pid] = [[int(r.k), int(r.pt)] + [int(getattr(r, src)) for _, src in stats] + [int(r.week)]
-                      for r in grp.itertuples()]
+    for pid, grp in w.sort_values(["season", "week"]).groupby("player_id", sort=False):
+        if pid in ro_ids:
+            games[pid] = []                     # no per-game data: hidden in Games mode
+            continue
+        out = []
+        for r in grp.itertuples():
+            vals = [int(getattr(r, src)) for _, src in stats]
+            if r.src == "nv":
+                out.append([int(r.k), int(r.pt)] + vals + [int(r.week)])
+            else:
+                order0 = {0: 0, 2: 100, 1: 200}[int(r.pt)]
+                g = int(r.gcount)
+                # Whole numbers that add back exactly: v // g each, remainder one per game
+                split = [[v // g + (1 if i < v - (v // g) * g else 0) for i in range(g)] for v in vals]
+                out += [[int(r.k), int(r.pt)] + [col[i] for col in split] + [order0 + i] for i in range(g)]
+        games[pid] = [x[:-1] for x in sorted(out, key=lambda x: (x[0], x[-1]))]
 
     dedupe_names(seasons)
-    # Align game lists with season list order, keyed by the (deduped) name
     game_list = []
     for p in seasons:
-        rows = games.pop(p["id"], [])
-        game_list.append({"n": p["n"], "g": rows})
+        game_list.append({"n": p["n"], "g": games.pop(p["id"], [])})
         del p["id"]
     return seasons, game_list
-
-
-def finalize_games(game_list):
-    """Sort each player's games by (season#, order) and drop the order column."""
-    for p in game_list:
-        p["g"] = [r[:-1] for r in sorted(p["g"], key=lambda r: (r[0], r[-1]))]
 
 
 def dedupe_names(lst):
@@ -208,68 +339,29 @@ def dedupe_names(lst):
 
 
 # ---------------------------------------------------------------------------
-# 4. Hand-entered seasons before 1999 (NFL.com, Pro Football Reference, StatMuse)
-#    Rushing figures and a few playoff per-game splits are approximate.
+# 5. Hand-entered playoff games before 1999 (Pro Football Reference, StatMuse)
+#    fdp has no playoffs. A few per-round splits are approximate.
 # ---------------------------------------------------------------------------
-def season(k, g, ptd, pyd, rtd, ryd, post=0):
-    """One row: season #k, games, pass TD, pass yds, rush TD, rush yds; post 0=reg, 1=playoff, 2=wild card."""
-    return [k, post, g, ptd, ptd + rtd, pyd, pyd + ryd]
-
-
-def add_hand_entered(players, game_list):
-    def P(name):
-        return next(p for p in players if p["n"] == name)
-
-    def spread(name, rows):
-        """Per-game rows for hand seasons: each season's totals split evenly over its games
-        (approximate). Regular-season games come first, then wild card, then later rounds."""
-        G = next(p for p in game_list if p["n"] == name)["g"]
-        for k, pt, g, *vals in rows:
-            order0 = {0: 0, 2: 100, 1: 200}[pt]
-            # Whole numbers that add back exactly: each game gets v // g, and the
-            # remainder is handed out one per game from the first game on.
-            split = [[v // g + (1 if i < v - (v // g) * g else 0) for i in range(g)] for v in vals]
-            for i in range(g):
-                G.append([k, pt] + [col[i] for col in split] + [order0 + i])
-
-    # Rookie (1998) seasons that predate the nflverse data
-    manning98, warner98 = [[1, 0, 16, 26, 26, 3739, 3739 + 62]], [[1, 0, 1, 0, 0, 39, 39]]
-    P("Peyton Manning")["r"] += manning98; spread("Peyton Manning", manning98)
-    P("Kurt Warner")["r"] += warner98;     spread("Kurt Warner", warner98)
-
-    # Marino 1983-1998 (1999 comes from nflverse). 1994 playoffs = remainder of career playoff totals.
-    marino = [season(1,11,20,2210,2,45), season(2,16,48,5084,0,-7), season(3,16,30,4137,0,-24),
-              season(4,16,44,4746,0,-3), season(5,12,26,3245,1,-5), season(6,16,28,4434,0,-17),
-              season(7,16,24,3997,2,-7), season(8,16,21,3563,0,29), season(9,16,25,3970,1,32),
-              season(10,16,24,4116,0,66), season(11,5,8,1218,1,-4), season(12,16,30,4453,1,-6),
-              season(13,14,24,3668,0,14-6), season(14,13,17,2795,0,-3), season(15,16,16,3780,0,-14),
-              season(16,16,23,3497,1,-3),
-              season(1,1,2,193,0,0,1), season(2,3,8,1001,0,0,1), season(3,2,2,486,0,0,1),
-              season(8,1,2,221,0,0,2), season(8,1,3,323,0,0,1), season(10,2,4,435,0,0,1),
-              season(12,1,2,257,0,0,2), season(12,1,4,262,0,0,1),
-              season(13,1,2,422,0,0,2), season(15,1,0,141,0,0,2),
-              season(16,1,1,235,0,0,2), season(16,1,0,243,0,0,1)]
-    # Favre 1991-1998 (1999-2010 from nflverse)
-    favre = [season(1,2,0,0,0,0), season(2,15,18,3227,1,198-7), season(3,16,19,3303,1,216),
-             season(4,16,33,3882,2,202), season(5,16,38,4413,3,181), season(6,16,39,3899,2,136),
-             season(7,16,35,3867,1,187), season(8,16,31,4212,1,133),
-             season(3,1,3,204,0,0,2), season(3,1,2,331,0,0,1), season(4,1,0,262,0,0,2),
-             season(4,1,0,211,0,0,1), season(5,1,3,199,0,0,2), season(5,2,5,606,0,0,1),
-             season(6,3,5,617,0,0,1), season(7,3,5,668,0,0,1), season(8,1,2,292,0,0,2)]
-    # Kelly 1986-1996 (whole career)
-    kelly = [season(1,16,22,3593,0,199), season(2,12,19,2798,0,133), season(3,16,15,3380,0,154),
-             season(4,13,25,3130,2,137), season(5,14,24,2829,0,63), season(6,15,33,3844,1,45),
-             season(7,16,23,3457,1,53), season(8,16,18,3382,0,102), season(9,14,22,3114,1,77),
-             season(10,15,22,3130,0,33), season(11,13,14,2810,0,0),
-             season(3,2,1,407,0,0,1), season(4,1,4,405,0,0,1), season(5,3,5,851,0,0,1),
-             season(6,3,5,665,0,0,1), season(7,2,1,259,0,0,1), season(8,3,2,707,0,0,1),
-             season(10,1,1,195,0,0,2), season(10,1,1,135,0,0,1), season(11,1,1,239,0,0,2)]
-
-    P("Dan Marino")["r"] += marino;  P("Dan Marino")["approx"] = 1;  spread("Dan Marino", marino)
-    P("Brett Favre")["r"] += favre;  P("Brett Favre")["approx"] = 1;  spread("Brett Favre", favre)
-    players.append({"n": "Jim Kelly", "s": 1986, "r": kelly, "approx": 1})
-    game_list.append({"n": "Jim Kelly", "g": []}); spread("Jim Kelly", kelly)
-    finalize_games(game_list)
+def hand_playoffs():
+    """Rows: (player, calendar season, gameType, games, passTD, passYds). 1 = playoff, 2 = wild card."""
+    P = [  # Marino
+         ("Dan Marino", 1983, 1, 1, 2, 193), ("Dan Marino", 1984, 1, 3, 8, 1001), ("Dan Marino", 1985, 1, 2, 2, 486),
+         ("Dan Marino", 1990, 2, 1, 2, 221), ("Dan Marino", 1990, 1, 1, 3, 323), ("Dan Marino", 1992, 1, 2, 4, 435),
+         ("Dan Marino", 1994, 2, 1, 2, 257), ("Dan Marino", 1994, 1, 1, 4, 262), ("Dan Marino", 1995, 2, 1, 2, 422),
+         ("Dan Marino", 1997, 2, 1, 0, 141), ("Dan Marino", 1998, 2, 1, 1, 235), ("Dan Marino", 1998, 1, 1, 0, 243),
+         # Favre
+         ("Brett Favre", 1993, 2, 1, 3, 204), ("Brett Favre", 1993, 1, 1, 2, 331), ("Brett Favre", 1994, 2, 1, 0, 262),
+         ("Brett Favre", 1994, 1, 1, 0, 211), ("Brett Favre", 1995, 2, 1, 3, 199), ("Brett Favre", 1995, 1, 2, 5, 606),
+         ("Brett Favre", 1996, 1, 3, 5, 617), ("Brett Favre", 1997, 1, 3, 5, 668), ("Brett Favre", 1998, 2, 1, 2, 292),
+         # Kelly
+         ("Jim Kelly", 1988, 1, 2, 1, 407), ("Jim Kelly", 1989, 1, 1, 4, 405), ("Jim Kelly", 1990, 1, 3, 5, 851),
+         ("Jim Kelly", 1991, 1, 3, 5, 665), ("Jim Kelly", 1992, 1, 2, 1, 259), ("Jim Kelly", 1993, 1, 3, 2, 707),
+         ("Jim Kelly", 1995, 2, 1, 1, 195), ("Jim Kelly", 1995, 1, 1, 1, 135), ("Jim Kelly", 1996, 2, 1, 1, 239)]
+    df = pd.DataFrame(P, columns=["player", "season", "pt", "gcount", "passing_tds", "passing_yards"])
+    df = df.assign(rushing_tds=0, receiving_tds=0, rushing_yards=0, receiving_yards=0, carries=0, receptions=0,
+                   week=0, season_type="POST", src="hand", position="QB")
+    df["player_display_name"] = df.player
+    return df.drop(columns="player")
 
 
 if __name__ == "__main__":

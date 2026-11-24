@@ -30,5 +30,10 @@ python -m http.server 8000    # then open http://localhost:8000
 
 - Seasons count from the rookie year; "games" = games with at least one recorded stat.
 - The current season is detected automatically (September onward = new season).
-- Pre-1999 careers (Marino, Favre, Kelly, and Manning's/Warner's 1998 seasons) are entered by hand
-  in `build_data.py`; some of their rushing and playoff-round splits are approximate.
+- 1970–1998 regular seasons come from [fantasydatapros/data](https://github.com/fantasydatapros/data)
+  (snapshot in `data/`). Checked against nflverse for every overlapping player-season 1999–2021
+  (~99% exact) and against NFL.com for Marino, Emmitt Smith and Jerry Rice (exact).
+  These players show only with Playoffs: Excluded and the slider on Seasons, except Marino, Favre and
+  Kelly (playoffs entered by hand) and Manning and Warner (no pre-1999 playoff games).
+- Three regular-season games missing from nflverse (1999 Rams–Ravens, 2000 Chiefs–Chargers and
+  Bills–Dolphins) are filled in from the season totals.
