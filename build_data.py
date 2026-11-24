@@ -128,7 +128,11 @@ def build():
     wr, wr_games = build_group(wk, modern & wk.player_id.map(pos).eq("WR"),
         [("rec", "receptions"), ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
         keep_col="receiving_yards", total_min=3000, season_min=800)
-    finalize_games(rb_games); finalize_games(wr_games)          # (QB list finalized with hand data)
+    # Tight ends: same receiving stats as WRs, lower size filter (TEs catch fewer yards)
+    te, te_games = build_group(wk, modern & wk.player_id.map(pos).eq("TE"),
+        [("rec", "receptions"), ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
+        keep_col="receiving_yards", total_min=2000, season_min=500)
+    finalize_games(rb_games); finalize_games(wr_games); finalize_games(te_games)          # (QB list finalized with hand data)
 
     # --- Label for "data through": last week with games in the current season ---
     cur_rows = wk[wk.season == cur]
@@ -139,11 +143,11 @@ def build():
     else:
         through = "the start of the season"
 
-    out = {"meta": {"season": cur, "through": through}, "players": qb, "rbs": rb, "wrs": wr}
+    out = {"meta": {"season": cur, "through": through}, "players": qb, "rbs": rb, "wrs": wr, "tes": te}
     OUT.write_text(json.dumps(out, separators=(",", ":")))
-    games = {"players": qb_games, "rbs": rb_games, "wrs": wr_games}
+    games = {"players": qb_games, "rbs": rb_games, "wrs": wr_games, "tes": te_games}
     OUT_GAMES.write_text(json.dumps(games, separators=(",", ":")))
-    print(f"Wrote {OUT.name}: {len(qb)} QB-list, {len(rb)} RBs, {len(wr)} WRs; "
+    print(f"Wrote {OUT.name}: {len(qb)} QB-list, {len(rb)} RBs, {len(wr)} WRs, {len(te)} TEs; "
           f"{OUT_GAMES.name}; {cur} data through {through}")
 
 

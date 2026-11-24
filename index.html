@@ -152,6 +152,7 @@
     <button role="tab" data-tab="qb" aria-selected="true">Quarterbacks</button>
     <button role="tab" data-tab="rb" aria-selected="false">Running backs</button>
     <button role="tab" data-tab="wr" aria-selected="false">Wide receivers</button>
+    <button role="tab" data-tab="te" aria-selected="false">Tight ends</button>
   </div>
   <p class="sub">Cumulative yards vs. yards per game, or cumulative TDs vs. TDs per game (set by Rank by), over each player's first <span id="nSub">10</span> <span id="nUnit">seasons</span>. Seasons count from the rookie year; games count only the game types the Playoffs setting includes.</p>
 
@@ -228,6 +229,9 @@
     <div class="tabnote" data-for="wr" hidden>
     <p><b>Wide receivers:</b> players whose most-listed position is WR (tight ends aren't included). Y/R = receiving yards per catch. Only careers that began in 1999 or later are included, so Jerry Rice, Tim Brown, Cris Carter, Isaac Bruce and other earlier receivers aren't in this tab.</p>
     </div>
+    <div class="tabnote" data-for="te" hidden>
+    <p><b>Tight ends:</b> players whose most-listed position is TE; receiving stats only. Y/R = receiving yards per catch. Only careers that began in 1999 or later are included, so Tony Gonzalez (1997), Shannon Sharpe, Ozzie Newsome and other earlier tight ends aren't in this tab.</p>
+    </div>
     <div class="tabnote" data-for="qb">
     <p><b>Games slider, pre-1999 seasons:</b> only season totals exist for Marino, Favre, Kelly and Manning's and Warner's 1998 seasons, so in Games mode each of those seasons is spread evenly across its games.</p>
     </div>
@@ -301,6 +305,8 @@ const TABS = {
     }
   }
 };
+// Tight ends: same receiving view as wide receivers
+TABS.te = { ...TABS.wr, list: 'tes', title: 'Tight ends' };
 const TAB_KEYS = Object.keys(TABS);
 const slotKeys = () => Object.keys(tab().slots);   // ['a'] or ['a', 'b']
 const tab = () => TABS[state.tab];
