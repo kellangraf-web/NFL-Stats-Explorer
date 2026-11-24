@@ -222,7 +222,7 @@
     <p><b>Running backs:</b> players whose most-listed position is RB. YPC = rushing yards per carry. Only careers that began in 1999 or later are included, so Emmitt Smith, Barry Sanders, Marshall Faulk, Curtis Martin, Jerome Bettis and other earlier backs aren't in this tab. Two players who share a name show their rookie year, e.g. Adrian Peterson (2007).</p>
     </div>
     <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Before 1999, Marino's, Favre's and Kelly's wild-card games are split out by hand, and a few of those per-game numbers are approximate.</p>
-    <p><b>Slider:</b> goes to 23 seasons, the length of Tom Brady's career (2000–2022). A retired player whose career was shorter than N counts with his full career.</p>
+    <p><b>Slider:</b> goes to <span id="maxN">23</span> seasons, the length of <span id="maxWho">Tom Brady</span>'s career (<span id="maxYears">2000–2022</span>). A retired player whose career was shorter than N counts with his full career.</p>
     <p><b>*</b> means the player is still active and his window includes the current <span class="curYr">2026</span> season (or one he hasn't reached yet), so his totals will keep growing.</p>
   </div>
 </div>
@@ -233,7 +233,8 @@
 let CUR = 2026;        // current season; replaced by the value in players.json on load
 const SHOW = 25;       // points plotted + rows tabled per chart
 const TOP = 10;        // highlighted in blue + labeled
-const MAXN = 23;       // slider max (Brady's career length)
+// Slider max = longest career among each position's all-time leaders (set per tab in TABS)
+const maxN = () => tab().maxN;
 // Preset colors handed out to new picks (avoid the blue/gray already used)
 const PICK_COLORS = ['#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#1098ad', '#f08c00', '#5c7cfa', '#868e96'];
 
@@ -256,6 +257,7 @@ const savePins = () => { try { localStorage.setItem('qbPins', JSON.stringify([..
 const TABS = {
   qb: {
     list: 'players', title: 'Quarterbacks',
+    maxN: 23, maxWho: 'Tom Brady', maxYears: '2000–2022',
     fields: ['g', 'ptd', 'ttd', 'pyd', 'tyd'],
     derive: d => d,
     slots: {
@@ -265,6 +267,7 @@ const TABS = {
   },
   rb: {
     list: 'rbs', title: 'Running backs', ypc: true,
+    maxN: 16, maxWho: 'Frank Gore', maxYears: '2005–2020',   // #3 all-time in rushing yards
     fields: ['g', 'att', 'ryd', 'rtd', 'recyd', 'rectd'],
     // scrimmage = rushing + receiving
     derive: d => { d.syd = d.ryd + d.recyd; d.std = d.rtd + d.rectd; return d; },
@@ -502,7 +505,7 @@ function showTip(ev, d, c, S) {
 
 // ===== Render both charts =====
 function render(dur = 450) {
-  d3.select('#nVal').text(state.n === 1 ? 'Rookie year' : state.n === MAXN ? `First ${MAXN} (max)` : `First ${state.n}`);
+  d3.select('#nVal').text(state.n === 1 ? 'Rookie year' : state.n === maxN() ? `First ${maxN()} (max)` : `First ${state.n}`);
   d3.select('#nSub').text(state.n); d3.select('#nPl').text(state.n === 1 ? '' : 's');
   d3.select('#nSlider').property('value', state.n);
   draw('a', dur); draw('b', dur);
@@ -547,12 +550,12 @@ function setPlaying(on) {
   if (!on) { clearInterval(timer); timer = null; }
 }
 function tick() {
-  if (state.n >= MAXN) { setPlaying(false); return; }   // stop at the end
+  if (state.n >= maxN()) { setPlaying(false); return; }   // stop at the end
   state.n += 1;
   render(stepMs() * 0.85);                               // glide most of the step
 }
 function play() {
-  if (state.n >= MAXN) { state.n = 1; render(300); }     // restart from rookie year
+  if (state.n >= maxN()) { state.n = 1; render(300); }     // restart from rookie year
   setPlaying(true);
   timer = setInterval(tick, stepMs());
 }
@@ -577,6 +580,10 @@ let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTime
 function setTab(t, dur = 300) {
   state.tab = t;
   PLAYERS = DATA[TABS[t].list];
+  const T = TABS[t];
+  d3.select('#nSlider').attr('max', T.maxN);
+  if (state.n > T.maxN) state.n = T.maxN;               // clamp when the new tab's max is lower
+  d3.select('#maxN').text(T.maxN); d3.select('#maxWho').text(T.maxWho); d3.select('#maxYears').text(T.maxYears);
   d3.selectAll('.tabs button').attr('aria-selected', function () { return this.dataset.tab === t; });
   d3.selectAll('.tabnote').property('hidden', function () { return this.dataset.for !== t; });
   // Autocomplete lists only this tab's players
