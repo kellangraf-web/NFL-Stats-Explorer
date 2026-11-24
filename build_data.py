@@ -102,7 +102,7 @@ def norm(name):
 
 
 def load_hist():
-    h = pd.read_csv(HIST)
+    h = pd.read_csv(HIST, dtype={"pos": str})
     h["key"] = h.player.map(norm)
     return h
 
@@ -142,9 +142,11 @@ def hist_players(hist):
     # A gap of 3+ seasons under one name = a different player with the same name
     h["run"] = h.groupby("key").season.transform(lambda s: (s.diff() > 3).cumsum())
     h["hid"] = h.key + "#" + h.run.astype(str)
+    # Position: most-listed real position (some seasons have it blank / "0")
+    real_pos = lambda s: (s[~s.isin(["0", ""]) & s.notna()].mode().iat[0]
+                          if (~s.isin(["0", ""]) & s.notna()).any() else "")
     car = h.groupby("hid").agg(name=("player", "first"), key=("key", "first"), first=("season", "min"),
-                               last=("season", "max"), age0=("age", "first"),
-                               pos=("pos", lambda s: s.mode().iat[0]))
+                               last=("season", "max"), age0=("age", "first"), pos=("pos", real_pos))
     # Careers already underway in 1970 would be incomplete: drop 1970 players aged 25+
     car = car[~((car["first"] == 1970) & (car.age0 >= 25))]
     return h[h.hid.isin(car.index)], car
@@ -191,7 +193,7 @@ def build():
     hr["player_id"] = hr.hid.map(link).fillna("H:" + hr.hid)
     names = wk.groupby("player_id").player_display_name.first()
     hr["player_display_name"] = hr.player_id.map(names).fillna(hr.player)
-    hr["position"] = hr.pos
+    hr["position"] = hr.hid.map(car["pos"])           # career position (blank seasons ignored)
     hr["start"] = hr.hid.map(car["first"])
     hr = hr.rename(columns={k: v for k, v in STAT_MAP.items()}).assign(
         week=0, season_type="REG", gcount=hr.g, src="hist", team=hr.team)
