@@ -82,12 +82,13 @@ def load_weekly(cur):
 # ---------------------------------------------------------------------------
 # 3. Games before 1999
 #    Main source: Kaggle "NFL football player stats" (game logs scraped from Pro Football
-#    Reference, incl. playoffs) -> data/kaggle_games_1970_1998.parquet (scripts/make_kaggle_snapshot.py).
+#    Reference, incl. playoffs and the AFL 1960-69) -> data/kaggle_games_1950_1998.parquet
+#    (scripts/make_kaggle_snapshot.py).
 #    Cross-check: fantasydatapros regular-season totals -> data/fdp_regular_season_1970_2000.csv,
 #    also used to fill three games missing from nflverse in 1999-2000.
 # ---------------------------------------------------------------------------
 DATA = Path(__file__).with_name("data")
-KAGGLE = DATA / "kaggle_games_1970_1998.parquet"
+KAGGLE = DATA / "kaggle_games_1950_1998.parquet"
 HIST = DATA / "fdp_regular_season_1970_2000.csv"
 STAT_MAP = {  # fantasydatapros column -> nflverse column
     "pass_yds": "passing_yards", "pass_td": "passing_tds", "rush_att": "carries",
@@ -149,8 +150,11 @@ def load_kaggle():
     k["pos"] = k.pos.replace({"HB": "RB", "B": "RB"})
     car = k.groupby("pid").agg(name=("name", "first"), key=("key", "first"), pos=("pos", "first"),
                                first=("first_season", "first"), last=("season", "max"))
-    # Careers that began before 1970 would be incomplete here: leave them out
-    car = car[car["first"] >= 1970]
+    # The data starts in 1950, so careers already underway then would be incomplete:
+    # drop players drafted before 1950, or already 25+ at their first 1950 game
+    pre = k.groupby("pid").agg(draft=("draft_year", "first"), age0=("first_age", "first"))
+    started_before = (pre.draft < 1950) | ((car["first"] == 1950) & (pre.age0 >= 25))
+    car = car[~started_before]
     return k[k.pid.isin(car.index)], car
 
 

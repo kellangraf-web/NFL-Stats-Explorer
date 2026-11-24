@@ -31,9 +31,9 @@ python -m http.server 8000    # then open http://localhost:8000
 
 - Seasons count from the rookie year; "games" = games with at least one recorded stat.
 - The current season is detected automatically (September onward = new season).
-- 1970–1998 games (regular season + playoffs) come from the Kaggle dataset
+- 1950–1998 games (regular season + playoffs, NFL and AFL 1960–69) come from the Kaggle dataset
   [NFL Football Player Stats](https://www.kaggle.com/datasets/zynicide/nfl-football-player-stats)
-  (Pro Football Reference game logs, scraped 2017), saved as `data/kaggle_games_1970_1998.parquet`
+  (Pro Football Reference game logs, scraped 2017), saved as `data/kaggle_games_1950_1998.parquet`
   by `scripts/make_kaggle_snapshot.py` (one-time; needs `pip install ijson` and the downloaded zip).
 - Cross-check: [fantasydatapros/data](https://github.com/fantasydatapros/data) season totals
   (`data/fdp_regular_season_1970_2000.csv`). Kaggle's regular seasons match it for 99.9% of
