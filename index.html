@@ -207,7 +207,6 @@
     </div>
   </div>
 
-  <p class="hint" id="roHint" hidden></p>
 
   <!-- Two charts (contents set by the active tab) -->
   <div class="grid">
@@ -242,7 +241,7 @@
     <div class="tabnote" data-for="te" hidden>
     <p><b>Tight ends:</b> players whose most-listed position is TE; receiving stats only. Y/R = receiving yards per catch.</p>
     </div>
-    <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Before 1999, Marino's, Favre's and Kelly's wild-card games are split out by hand, and a few of those per-game numbers are approximate.</p>
+    <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Wild-card games exist from 1978 on.</p>
     <p><b>Slider:</b> <span id="sliderNote"></span> A retired player whose career was shorter than N counts with his full career.</p>
     <p><b>*</b> means the player is still active and his window includes the current <span class="curYr">2026</span> season (or one he hasn't reached yet), so his totals will keep growing.</p>
   </div>
@@ -252,11 +251,10 @@
     <h3 id="sources-h">How the data is sourced</h3>
     <ul>
       <li><b>1999 to today:</b> game-by-game player stats from <a href="https://github.com/nflverse/nflverse-data">nflverse</a>, an open-source project built from the NFL's official game data. Regular season and playoffs; preseason is excluded. A GitHub Action rebuilds the data every morning and republishes the site whenever new games have been played (currently through <span class="throughCopy">Week 10</span> of <span class="curYr">2026</span>).</li>
-      <li><b>1970–1998:</b> regular-season totals from <a href="https://github.com/fantasydatapros/data">fantasydatapros</a>, which compiles Pro Football Reference season stats. Before adding it, we checked it against nflverse for every player-season both cover (1999–2021): about 99% match exactly and season totals agree within 0.1%. Every pre-1999 season for Dan Marino, Emmitt Smith and Jerry Rice also matches NFL.com exactly.</li>
-      <li><b>Playoffs before 1999:</b> this source has no playoff stats, so those players appear only with Playoffs set to <i>Excluded</i> and the slider on <i>Seasons</i>. Exceptions: Dan Marino's, Brett Favre's and Jim Kelly's playoff games were entered by hand from Pro Football Reference and StatMuse (a few per-round splits are approximate), and Peyton Manning and Kurt Warner played no playoff games before 1999.</li>
-      <li><b>Games mode before 1999:</b> there are no game-by-game stats, so for the five players above each pre-1999 season is spread evenly across its games; season totals still add up exactly.</li>
-      <li><b>Fixes:</b> three regular-season games are missing from nflverse (1999 Rams–Ravens, 2000 Chiefs–Chargers and Bills–Dolphins); each affected player's missing game is filled in from his season totals.</li>
-      <li><b>Players:</b> <span id="posRule"></span> Seasons count from the rookie year. "Games" counts games with at least one recorded stat. Passing yards are gross (sacks not subtracted). Two players with the same name show their rookie year, e.g. Adrian Peterson (2007).</li>
+      <li><b>1970–1998:</b> game-by-game stats, regular season and playoffs, from the <a href="https://www.kaggle.com/datasets/zynicide/nfl-football-player-stats">NFL Football Player Stats</a> dataset on Kaggle (game logs collected from Pro Football Reference in 2017). A game is a playoff game when it comes after that season's regular-season schedule (14 games through 1977, 16 from 1978, 9 in 1982 and 15 in 1987); the wild-card round is the first playoff weekend from 1978 on.</li>
+      <li><b>How it was checked:</b> its regular seasons add up exactly to a second, independent source (<a href="https://github.com/fantasydatapros/data">fantasydatapros</a>) for 99.9% of 1970–1998 player-seasons (the rest are two players who share a name). Where it overlaps nflverse (1999–2016), about 99% of regular-season and 99.9% of playoff player-seasons match exactly. Against NFL.com, every pre-1999 regular season for Dan Marino, Emmitt Smith and Jerry Rice matches, as do individual playoff games for Marino (1984), Joe Montana (1989), Smith (1995) and Rice (1988). The site's build re-runs the fantasydatapros cross-check every time it updates.</li>
+      <li><b>Fixes:</b> three regular-season games are missing from nflverse (1999 Rams–Ravens, 2000 Chiefs–Chargers and Bills–Dolphins); each affected player's missing game is filled in from his fantasydatapros season totals.</li>
+      <li><b>Players:</b> <span id="posRule"></span> Seasons count from the rookie year. From 1999, "games" counts games with at least one recorded stat; before 1999, games played. Passing yards are gross (sacks not subtracted). Two players with the same name show their rookie year, e.g. Adrian Peterson (2007).</li>
       <li><b>Not included:</b> careers that began before 1970 (e.g. Johnny Unitas, Jim Brown), and stats from other leagues (AFL before 1970, USFL, CFL).</li>
     </ul>
     <p class="src-foot">Code and data: <a href="https://github.com/kellangraf-web/NFL-Stats-Explorer">github.com/kellangraf-web/NFL-Stats-Explorer</a></p>
@@ -333,10 +331,7 @@ const TAB_KEYS = Object.keys(TABS);
 const slotKeys = () => Object.keys(tab().slots);   // ['a'] or ['a', 'b']
 const tab = () => TABS[state.tab];
 
-// Players with only regular-season totals before 1999 (p.ro) are complete only with
-// Playoffs: Excluded and the slider on Seasons; elsewhere they're left out.
-const roView = () => state.mode === 'reg' && state.unit === 'seasons';
-const showable = p => !p.ro || roView();
+
 
 // ===== Aggregate one player's first n seasons, or first n games =====
 function agg(p) {
@@ -415,7 +410,7 @@ function rowsFor(S) {
   const byYds = state.rank === 'yds';
   const primary = byYds ? S.yds : S.td, secondary = byYds ? S.td : S.yds;
   // Everyone with games in this window, ranked
-  const all = PLAYERS.filter(showable).map(agg).filter(d => d.g > 0 && (state.incl || !d.notReached))
+  const all = PLAYERS.map(agg).filter(d => d.g > 0 && (state.incl || !d.notReached))
     .sort((a, b) => b[primary] - a[primary] || b[secondary] - a[secondary])
     .map((d, i) => {
       const ypg = d[S.yds] / d.g, tdg = d[S.td] / d.g;
@@ -599,10 +594,6 @@ function render(dur = 450) {
   d3.select('#incTxt').text(g ? "Include players who haven't played N games yet" : "Include players who haven't reached season N yet");
   d3.select('#nSlider').attr('max', max).property('value', n);
   slotKeys().forEach(k => draw(k, dur));
-  // Tell the reader when older careers are being left out of this view
-  const hidden = roView() ? 0 : PLAYERS.filter(p => p.ro).length;
-  d3.select('#roHint').property('hidden', !hidden)
-    .text(hidden ? `${hidden} players whose careers began before 1999 are hidden in this view (only their regular-season totals exist). Set Playoffs to Excluded and the slider to Seasons to include them.` : '');
 }
 
 // ===== Player color picks =====
@@ -720,7 +711,7 @@ function computeMax(t) {
 function computeMaxGames(t) {
   const T = TABS[t], list = DATA[T.list];
   const yi = T.fields.indexOf(T.slots.a.yds) + 2;
-  const best = list.filter(p => !p.ro).map(p => ({ p, yds: p.r.reduce((s, r) => s + r[yi], 0), games: (p.gm || []).length }))
+  const best = list.map(p => ({ p, yds: p.r.reduce((s, r) => s + r[yi], 0), games: (p.gm || []).length }))
     .sort((a, b) => b.yds - a.yds).slice(0, LEADERS)
     .sort((a, b) => b.games - a.games || b.yds - a.yds)[0];
   T.maxG = best.games;
