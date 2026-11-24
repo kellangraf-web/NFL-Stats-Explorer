@@ -233,7 +233,8 @@
 let CUR = 2026;        // current season; replaced by the value in players.json on load
 const SHOW = 25;       // points plotted + rows tabled per chart
 const TOP = 10;        // highlighted in blue + labeled
-// Slider max = longest career among each position's all-time leaders (set per tab in TABS)
+// Slider max = longest career among each position's all-time leaders (computed from data on load)
+const LEADERS = 25;   // how many all-time leaders to look at
 const maxN = () => tab().maxN;
 // Preset colors handed out to new picks (avoid the blue/gray already used)
 const PICK_COLORS = ['#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#1098ad', '#f08c00', '#5c7cfa', '#868e96'];
@@ -257,7 +258,6 @@ const savePins = () => { try { localStorage.setItem('qbPins', JSON.stringify([..
 const TABS = {
   qb: {
     list: 'players', title: 'Quarterbacks',
-    maxN: 23, maxWho: 'Tom Brady', maxYears: '2000–2022',
     fields: ['g', 'ptd', 'ttd', 'pyd', 'tyd'],
     derive: d => d,
     slots: {
@@ -267,7 +267,6 @@ const TABS = {
   },
   rb: {
     list: 'rbs', title: 'Running backs', ypc: true,
-    maxN: 16, maxWho: 'Frank Gore', maxYears: '2005–2020',   // #3 all-time in rushing yards
     fields: ['g', 'att', 'ryd', 'rtd', 'recyd', 'rectd'],
     // scrimmage = rushing + receiving
     derive: d => { d.syd = d.ryd + d.recyd; d.std = d.rtd + d.rectd; return d; },
@@ -576,6 +575,22 @@ seg('rankSeg', 'rank', v => v);
 d3.select('#incChk').on('change', function () { state.incl = this.checked; render(); });
 let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { setup('a'); setup('b'); render(0); }, 120); });
 
+// ===== Dynamic slider max =====
+// Rank everyone by career yards in the tab's first chart (passing / rushing, all games),
+// take the top 25, and use the longest career among them (seasons from rookie year).
+function computeMax(t) {
+  const T = TABS[t], list = DATA[T.list];
+  const yi = T.fields.indexOf(T.slots.a.yds) + 2;           // column of passing / rushing yards
+  const careers = list.map(p => ({
+    p, yds: p.r.reduce((s, r) => s + r[yi], 0),
+    seasons: Math.max(...p.r.map(r => r[0]))                  // highest season index = career length
+  })).sort((a, b) => b.yds - a.yds).slice(0, LEADERS);
+  const best = careers.sort((a, b) => b.seasons - a.seasons || b.yds - a.yds)[0];
+  T.maxN = best.seasons;
+  T.maxWho = best.p.n.replace(/ \(\d{4}\)$/, '');            // drop "(2007)" style suffix
+  T.maxYears = `${best.p.s}–${best.p.s + best.seasons - 1}`;
+}
+
 // ===== Tab switching =====
 function setTab(t, dur = 300) {
   state.tab = t;
@@ -598,6 +613,7 @@ window.addEventListener('hashchange', () => { const t = location.hash === '#rb' 
 fetch('players.json').then(r => r.json()).then(d => {
   // players.json = { meta: {season, through}, players: [...] }
   DATA = d;
+  Object.keys(TABS).forEach(computeMax);                     // slider max per tab
   CUR = d.meta.season;
   d3.selectAll('.curYr').text(CUR);
   d3.select('#through').text(d.meta.through);
