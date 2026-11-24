@@ -129,6 +129,17 @@
   td .tsw { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
   tr.out td { color: var(--text-muted); }
   tr.sep td { border-top: 2px solid var(--border); }
+  /* ---- Position tabs ---- */
+  .tabs { display: flex; gap: 4px; margin: 4px 0 14px; border-bottom: 1px solid var(--border); }
+  .tabs button { font: inherit; font-size: 14px; padding: 8px 14px; border: 0; background: transparent;
+    color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected="true"] { color: var(--text-primary); font-weight: 650; border-bottom-color: var(--series-1); }
+
+  /* ---- Sortable table headers ---- */
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text-primary); }
+  th.sorted { color: var(--text-primary); font-weight: 650; }
+  th .arr { font-size: 9px; margin-left: 3px; }
   .notes { color: var(--text-muted); font-size: 12px; margin-top: 18px; line-height: 1.55; }
   .notes p { margin: 4px 0; }
 </style>
@@ -137,6 +148,10 @@
 <div class="viz-root">
 <div class="wrap">
   <h1>First-N-Seasons Explorer</h1>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="qb" aria-selected="true">Quarterbacks</button>
+    <button role="tab" data-tab="rb" aria-selected="false">Running backs</button>
+  </div>
   <p class="sub">Cumulative yards vs. yards per game, or cumulative TDs vs. TDs per game (set by Rank by), over each player's first <span id="nSub">10</span> season<span id="nPl">s</span>. Seasons count from the rookie year.</p>
 
   <!-- Controls -->
@@ -180,27 +195,32 @@
     </div>
   </div>
 
-  <!-- Two charts -->
+  <!-- Two charts (contents set by the active tab) -->
   <div class="grid">
-    <div class="card" id="card-pass">
-      <h2>Passing</h2>
-      <div class="desc" id="desc-pass"></div>
+    <div class="card" id="card-a">
+      <h2 id="title-a"></h2>
+      <div class="desc" id="desc-a"></div>
       <div class="legend"><span><i class="sw" style="background:var(--series-1)"></i>Top 10</span><span><i class="sw" style="background:var(--other)"></i>Ranks 11–25</span><span><i class="sw" style="border:2px solid var(--series-1)"></i>* Window still in progress</span><span>Colored: your picks (always shown)</span></div>
-      <div class="chart" id="chart-pass"><div class="tip"></div></div>
-      <div class="tbl-wrap"><table id="tbl-pass"></table></div>
+      <div class="chart" id="chart-a"><div class="tip"></div></div>
+      <div class="tbl-wrap"><table id="tbl-a"></table></div>
     </div>
-    <div class="card" id="card-total">
-      <h2>Total (pass + rush + rec)</h2>
-      <div class="desc" id="desc-total"></div>
+    <div class="card" id="card-b">
+      <h2 id="title-b"></h2>
+      <div class="desc" id="desc-b"></div>
       <div class="legend"><span><i class="sw" style="background:var(--series-1)"></i>Top 10</span><span><i class="sw" style="background:var(--other)"></i>Ranks 11–25</span><span><i class="sw" style="border:2px solid var(--series-1)"></i>* Window still in progress</span><span>Colored: your picks (always shown)</span></div>
-      <div class="chart" id="chart-total"><div class="tip"></div></div>
-      <div class="tbl-wrap"><table id="tbl-total"></table></div>
+      <div class="chart" id="chart-b"><div class="tip"></div></div>
+      <div class="tbl-wrap"><table id="tbl-b"></table></div>
     </div>
   </div>
 
   <div class="notes">
-    <p><b>Data:</b> 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few dozen yards per player.</p>
+    <p><b>Data:</b> 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Click any table header to sort by it; click again to flip the order. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few dozen yards per player.</p>
+    <div class="tabnote" data-for="qb">
     <p><b>Pre-1999:</b> Dan Marino (1983–98), Brett Favre (1991–98), Jim Kelly (full career) and the 1998 seasons of Peyton Manning and Kurt Warner are entered by hand from NFL.com, Pro Football Reference and StatMuse; their 1999+ seasons come from nflverse. Their rushing figures and a few playoff numbers are approximate. Other careers that began before 1999 (Montana, Elway, Moon, Testaverde, Gannon, etc.) aren't included.</p>
+    </div>
+    <div class="tabnote" data-for="rb" hidden>
+    <p><b>Running backs:</b> players whose most-listed position is RB. YPC = rushing yards per carry. Only careers that began in 1999 or later are included, so Emmitt Smith, Barry Sanders, Marshall Faulk, Curtis Martin, Jerome Bettis and other earlier backs aren't in this tab. Two players who share a name show their rookie year, e.g. Adrian Peterson (2007).</p>
+    </div>
     <p><b>Wild card:</b> the first playoff week of each season. "No WC" drops those games (divisional, conference and Super Bowl games remain). Before 1999, Marino's, Favre's and Kelly's wild-card games are split out by hand, and a few of those per-game numbers are approximate.</p>
     <p><b>Slider:</b> goes to 23 seasons, the length of Tom Brady's career (2000–2022). A retired player whose career was shorter than N counts with his full career.</p>
     <p><b>*</b> means the player is still active and his window includes the current <span class="curYr">2026</span> season (or one he hasn't reached yet), so his totals will keep growing.</p>
@@ -218,39 +238,61 @@ const MAXN = 23;       // slider max (Brady's career length)
 const PICK_COLORS = ['#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#1098ad', '#f08c00', '#5c7cfa', '#868e96'];
 
 // ===== UI state =====
-const state = { n: 10, mode: 'all', rank: 'yds', incl: true };
+const state = { n: 10, mode: 'all', rank: 'yds', incl: true, tab: 'qb' };
+// Table sort per tab+chart, e.g. sorts['rb-a'] = {key: 'ypc', dir: -1}; none = by rank
+const sorts = {};
 // Which game types each Playoffs mode keeps (row type: 0 = regular, 1 = playoff, 2 = wild-card playoff)
 const MODES = { all: [0, 1, 2], reg: [0], post: [1, 2], postnowc: [1] };
-let PLAYERS = [];
+let DATA = null;        // whole players.json
+let PLAYERS = [];       // players of the active tab
 let pins = new Map();   // player name -> chosen color
 
 // Remember picks in this browser only (storage can be missing or throw)
 try { pins = new Map(JSON.parse(localStorage.getItem('qbPins') || '[]')); } catch (e) {}
 const savePins = () => { try { localStorage.setItem('qbPins', JSON.stringify([...pins])); } catch (e) {} };
 
+// ===== Tabs: which list, which fields each data row holds, and the two charts =====
+// Every data row starts [seasonIdx, gameType, games, ...]; `fields` names the rest.
+const TABS = {
+  qb: {
+    list: 'players', title: 'Quarterbacks',
+    fields: ['g', 'ptd', 'ttd', 'pyd', 'tyd'],
+    derive: d => d,
+    slots: {
+      a: { title: 'Passing', yds: 'pyd', td: 'ptd', xLabelYd: 'Passing yards', xLabelTd: 'Passing TDs', yLabelYd: 'Passing yards per game', yLabelTd: 'Passing TDs per game', ydHead: 'Pass Yds', tdHead: 'Pass TD' },
+      b: { title: 'Total (pass + rush + rec)', yds: 'tyd', td: 'ttd', xLabelYd: 'Total yards', xLabelTd: 'Total TDs', yLabelYd: 'Total yards per game', yLabelTd: 'Total TDs per game', ydHead: 'Total Yds', tdHead: 'Total TD' }
+    }
+  },
+  rb: {
+    list: 'rbs', title: 'Running backs', ypc: true,
+    fields: ['g', 'att', 'ryd', 'rtd', 'recyd', 'rectd'],
+    // scrimmage = rushing + receiving
+    derive: d => { d.syd = d.ryd + d.recyd; d.std = d.rtd + d.rectd; return d; },
+    slots: {
+      a: { title: 'Rushing', yds: 'ryd', td: 'rtd', xLabelYd: 'Rushing yards', xLabelTd: 'Rushing TDs', yLabelYd: 'Rushing yards per game', yLabelTd: 'Rushing TDs per game', ydHead: 'Rush Yds', tdHead: 'Rush TD' },
+      b: { title: 'Scrimmage (rush + rec)', yds: 'syd', td: 'std', xLabelYd: 'Scrimmage yards', xLabelTd: 'Scrimmage TDs', yLabelYd: 'Scrimmage yards per game', yLabelTd: 'Scrimmage TDs per game', ydHead: 'Scrim Yds', tdHead: 'Scrim TD' }
+    }
+  }
+};
+const tab = () => TABS[state.tab];
+
 // ===== Aggregate one player's first n seasons =====
-// each row r = [seasonIdx, gameType, games, passTD, totalTD, passYds, totalYds]
 function agg(p) {
-  let g = 0, ptd = 0, ttd = 0, pyd = 0, tyd = 0;
+  const F = tab().fields, sum = {};
+  F.forEach(f => sum[f] = 0);
   for (const r of p.r) {
     if (r[0] > state.n) continue;                      // outside the window
     if (!MODES[state.mode].includes(r[1])) continue;   // game type filtered out by Playoffs mode
-    g += r[2]; ptd += r[3]; ttd += r[4]; pyd += r[5]; tyd += r[6];
+    for (let i = 0; i < F.length; i++) sum[F[i]] += r[i + 2];
   }
   const lastSeason = p.s + state.n - 1;                // calendar year of season N
   if (p.last === undefined) p.last = p.s + Math.max(...p.r.map(r => r[0])) - 1;  // last season played
   const playing = p.last === CUR;                      // has stats in the current season
-  return { name: p.n, start: p.s, end: Math.min(lastSeason, p.last), g, ptd, ttd, pyd, tyd,
+  return tab().derive({ name: p.n, start: p.s, end: Math.min(lastSeason, p.last), ...sum,
            active: playing && lastSeason >= CUR,       // window still being added to
            notReached: playing && lastSeason > CUR,    // hasn't played season N yet
-           approx: !!p.approx };
+           approx: !!p.approx });
 }
-
-// ===== Chart specs: which fields each chart uses =====
-const SPECS = {
-  pass:  { yds: 'pyd', td: 'ptd', xLabelYd: 'Passing yards', xLabelTd: 'Passing TDs', yLabelTd: 'Passing TDs per game', yLabelYd: 'Passing yards per game', tdHead: 'Pass TD', ydHead: 'Pass Yds' },
-  total: { yds: 'tyd', td: 'ttd', xLabelYd: 'Total yards', xLabelTd: 'Total TDs', yLabelTd: 'Total TDs per game', yLabelYd: 'Total yards per game', tdHead: 'Total TD', ydHead: 'Total Yds' }
-};
 
 const fmt = d3.format(',');
 const f1 = d3.format('.1f'), f2 = d3.format('.2f');
@@ -289,6 +331,7 @@ function rowsFor(S) {
     .map((d, i) => {
       const ypg = d[S.yds] / d.g, tdg = d[S.td] / d.g;
       return { ...d, rank: i + 1, yd: d[S.yds], td: d[S.td], ypg, tdg,
+               ypc: d.att ? d.ryd / d.att : null,                // RB tab only
                x: byYds ? d[S.yds] : d[S.td], y: byYds ? ypg : tdg,   // axes follow Rank by
                color: pins.get(d.name) || null };
     });
@@ -300,9 +343,10 @@ function rowsFor(S) {
 
 // ===== Draw one chart + table (dur = transition length in ms) =====
 function draw(key, dur) {
-  const S = SPECS[key], c = charts[key];
+  const S = tab().slots[key], c = charts[key];
   const { top, extra, plot, byYds } = rowsFor(S);
   const yLabel = byYds ? S.yLabelYd : S.yLabelTd, xLabel = byYds ? S.xLabelYd : S.xLabelTd;
+  d3.select('#title-' + key).text(S.title);
   d3.select('#desc-' + key).text(`${xLabel} (x) vs. ${yLabel.replace(/^\w/, ch => ch.toLowerCase())} (y)`);
   c.svg.attr('aria-label', `${xLabel} vs ${yLabel}, first ${state.n} seasons`);
   const { W, H } = c;
@@ -379,24 +423,63 @@ function draw(key, dur) {
     .attr('text-anchor', d => d.anchor).text(d => d.txt)
     .transition(t).attr('opacity', 1).attr('x', d => d.tx).attr('y', d => d.ty);
 
-  // --- Table: all 25, plus picks ranked lower ---
+  // --- Table: all 25 (plus picks ranked lower), sortable by any column ---
+  drawTable(key, S, top, extra, c);
+}
+
+// Column definitions; `get` gives the sort value, `show` the cell text
+function columnsFor(S) {
+  const cols = [
+    { key: 'rank', head: '#', get: d => d.rank, show: d => d.rank, asc: true },
+    { key: 'name', head: 'Player', get: d => d.name, show: null, asc: true },
+    { key: 'g', head: 'G', get: d => d.g, show: d => d.g }];
+  if (tab().ypc) cols.push({ key: 'att', head: 'Att', get: d => d.att, show: d => fmt(d.att) });
+  cols.push({ key: 'yd', head: S.ydHead, get: d => d.yd, show: d => fmt(d.yd) });
+  if (tab().ypc) cols.push({ key: 'ypc', head: 'YPC', get: d => d.ypc ?? -1, show: d => d.ypc == null ? '–' : f1(d.ypc) });
+  cols.push(
+    { key: 'ypg', head: 'YPG', get: d => d.ypg, show: d => f1(d.ypg) },
+    { key: 'td', head: S.tdHead, get: d => d.td, show: d => d.td },
+    { key: 'tdg', head: 'TD/G', get: d => d.tdg, show: d => f2(d.tdg) });
+  return cols;
+}
+
+function drawTable(key, S, top, extra, c) {
+  const cols = columnsFor(S), sid = state.tab + '-' + key;
+  const sort = sorts[sid] || { key: 'rank', dir: 1 };          // default: rank order
+  const col = cols.find(k => k.key === sort.key) || cols[0];
+  const cmp = (a, b) => {
+    const va = col.get(a), vb = col.get(b);
+    const r = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+    return r * sort.dir || a.rank - b.rank;                     // ties keep rank order
+  };
+  // Top 25 sorted; picks below 25 stay under the divider, sorted the same way
+  const rows = top.slice().sort(cmp).concat(extra.slice().sort(cmp));
+
   const tbl = d3.select('#tbl-' + key);
   tbl.selectAll('*').remove();
-  const heads = ['#', 'Player', 'G', S.ydHead, 'YPG', S.tdHead, 'TD/G'];
-  tbl.append('thead').append('tr').selectAll('th').data(heads).join('th').text(h => h);
+  const th = tbl.append('thead').append('tr').selectAll('th').data(cols).join('th')
+    .attr('class', k => 'sortable' + (k.key === col.key ? ' sorted' : ''))
+    .attr('title', 'Sort by this column')
+    .on('click', (ev, k) => {
+      // Same column flips direction; a new column starts at its natural order
+      const cur = sorts[sid] || { key: 'rank', dir: 1 };
+      sorts[sid] = cur.key === k.key ? { key: k.key, dir: -cur.dir } : { key: k.key, dir: k.asc ? 1 : -1 };
+      render(0);
+    });
+  th.text(k => k.head);
+  th.filter(k => k.key === col.key).append('span').attr('class', 'arr').text(sort.dir > 0 ? '▲' : '▼');
+
   const shortNames = c.host.node().clientWidth < 440;          // phones: "P. Mahomes"
-  const tr = tbl.append('tbody').selectAll('tr').data(top.concat(extra)).join('tr')
+  const tr = tbl.append('tbody').selectAll('tr').data(rows).join('tr')
     .classed('out', d => d.rank > SHOW)
-    .classed('sep', (d, i) => i === SHOW);                      // divider before picks below 25
-  tr.append('td').text(d => d.rank);
-  const nameTd = tr.append('td');
-  nameTd.filter(d => d.color).append('i').attr('class', 'tsw').style('background', d => d.color);
-  nameTd.append('span').text(d => shortNames ? shortOf(d) : nameOf(d));
-  tr.append('td').text(d => d.g);
-  tr.append('td').classed('sortcol', byYds).text(d => fmt(d.yd));
-  tr.append('td').text(d => f1(d.ypg));
-  tr.append('td').classed('sortcol', !byYds).text(d => d.td);
-  tr.append('td').text(d => f2(d.tdg));
+    .classed('sep', (d, i) => i === top.length && extra.length > 0);  // divider before picks below 25
+  cols.forEach(k => {
+    const td = tr.append('td').classed('sortcol', k.key === col.key && k.key !== 'rank');
+    if (k.key === 'name') {
+      td.filter(d => d.color).append('i').attr('class', 'tsw').style('background', d => d.color);
+      td.append('span').text(d => shortNames ? shortOf(d) : nameOf(d));
+    } else td.text(k.show);
+  });
 }
 
 // ===== Tooltip, clamped inside the chart box =====
@@ -404,7 +487,9 @@ function showTip(ev, d, c, S) {
   const span = d.start === d.end ? `${d.start}` : `${d.start}–${d.end}`;
   c.tip.html('');
   c.tip.append('b').text(`#${d.rank} ${nameOf(d)}`);
-  [['Seasons', span], ['Games', d.g], [S.ydHead, fmt(d.yd)], ['Yds/game', f1(d.ypg)], [S.tdHead, d.td], ['TD/game', f2(d.tdg)]]
+  const tipRows = [['Seasons', span], ['Games', d.g], [S.ydHead, fmt(d.yd)], ['Yds/game', f1(d.ypg)], [S.tdHead, d.td], ['TD/game', f2(d.tdg)]];
+  if (tab().ypc) tipRows.splice(2, 0, ['Carries', fmt(d.att)], ['YPC', d.ypc == null ? '–' : f1(d.ypc)]);
+  tipRows
     .forEach(([k, v]) => { const r = c.tip.append('div').attr('class', 'row'); r.append('span').text(k); r.append('span').text(v); });
   c.tip.append('div').attr('class', 'row').append('span').text(pins.has(d.name) ? 'Click to remove color' : 'Click to color this player');
   const [px, py] = d3.pointer(ev, c.host.node());
@@ -417,10 +502,10 @@ function showTip(ev, d, c, S) {
 
 // ===== Render both charts =====
 function render(dur = 450) {
-  d3.select('#nVal').text(state.n === 1 ? 'Rookie year' : state.n === MAXN ? `First ${MAXN} (Brady max)` : `First ${state.n}`);
+  d3.select('#nVal').text(state.n === 1 ? 'Rookie year' : state.n === MAXN ? `First ${MAXN} (max)` : `First ${state.n}`);
   d3.select('#nSub').text(state.n); d3.select('#nPl').text(state.n === 1 ? '' : 's');
   d3.select('#nSlider').property('value', state.n);
-  draw('pass', dur); draw('total', dur);
+  draw('a', dur); draw('b', dur);
 }
 
 // ===== Player color picks =====
@@ -486,18 +571,33 @@ function seg(id, keyName, parse) {
 seg('postSeg', 'mode', v => v);
 seg('rankSeg', 'rank', v => v);
 d3.select('#incChk').on('change', function () { state.incl = this.checked; render(); });
-let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { setup('pass'); setup('total'); render(0); }, 120); });
+let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { setup('a'); setup('b'); render(0); }, 120); });
+
+// ===== Tab switching =====
+function setTab(t, dur = 300) {
+  state.tab = t;
+  PLAYERS = DATA[TABS[t].list];
+  d3.selectAll('.tabs button').attr('aria-selected', function () { return this.dataset.tab === t; });
+  d3.selectAll('.tabnote').property('hidden', function () { return this.dataset.for !== t; });
+  // Autocomplete lists only this tab's players
+  d3.select('#playerList').selectAll('option').data(PLAYERS.map(p => p.n).sort()).join('option').attr('value', n => n);
+  try { history.replaceState(null, '', '#' + t); } catch (e) {}
+  render(dur);
+}
+d3.selectAll('.tabs button').on('click', function () { setPlaying(false); setTab(this.dataset.tab); });
+window.addEventListener('hashchange', () => { const t = location.hash === '#rb' ? 'rb' : 'qb'; if (t !== state.tab) setTab(t); });
 
 // ===== Load data =====
 fetch('players.json').then(r => r.json()).then(d => {
   // players.json = { meta: {season, through}, players: [...] }
-  PLAYERS = d.players;
+  DATA = d;
   CUR = d.meta.season;
   d3.selectAll('.curYr').text(CUR);
   d3.select('#through').text(d.meta.through);
   // Autocomplete list of every player in the data
-  d3.select('#playerList').selectAll('option').data(PLAYERS.map(p => p.n).sort()).join('option').attr('value', n => n);
-  setup('pass'); setup('total'); renderChips(); render(0);
+  setup('a'); setup('b'); renderChips();
+  // Open the tab named in the link (#qb or #rb), else quarterbacks
+  setTab(location.hash === '#rb' ? 'rb' : 'qb', 0);
 }).catch(() => d3.select('.sub').text('Could not load the player data.'));
 </script>
 </body>

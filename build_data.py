@@ -55,9 +55,9 @@ def fetch_parquet(url, tries=4):
 
 def load_weekly(cur):
     """Stack every season's weekly player stats, 1999 -> cur."""
-    cols = ["player_id", "player_display_name", "season", "week", "season_type",
+    cols = ["player_id", "player_display_name", "position", "season", "week", "season_type",
             "passing_tds", "rushing_tds", "receiving_tds",
-            "passing_yards", "rushing_yards", "receiving_yards"]
+            "passing_yards", "rushing_yards", "receiving_yards", "carries"]
     frames = []
     for yr in range(1999, cur + 1):
         df = fetch_parquet(f"{BASE}/stats_player/stats_player_week_{yr}.parquet")
@@ -68,7 +68,11 @@ def load_weekly(cur):
         print(f"  {yr}: {len(df):,} rows")
     wk = pd.concat(frames, ignore_index=True)
     # Regular season + playoffs only (preseason is excluded)
-    return wk[wk.season_type.isin(["REG", "POST"])].fillna(0)
+    wk = wk[wk.season_type.isin(["REG", "POST"])]
+    num = wk.columns.drop(["player_id", "player_display_name", "position", "season_type"])
+    wk[num] = wk[num].fillna(0)            # missing stat = 0
+    wk["position"] = wk["position"].fillna("")
+    return wk
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +128,7 @@ def build():
         players.append({"n": name, "s": int(start), "r": rows})
 
     add_hand_entered(players)
+    rbs = build_rbs(wk)
 
     # --- Label for "data through": last week with games in the current season ---
     cur_rows = wk[wk.season == cur]
@@ -134,9 +139,49 @@ def build():
     else:
         through = "the start of the season"
 
-    out = {"meta": {"season": cur, "through": through}, "players": players}
+    dedupe_names(players); dedupe_names(rbs)
+    out = {"meta": {"season": cur, "through": through}, "players": players, "rbs": rbs}
     OUT.write_text(json.dumps(out, separators=(",", ":")))
-    print(f"Wrote {OUT.name}: {len(players)} players, {cur} data through {through}")
+    print(f"Wrote {OUT.name}: {len(players)} players, {len(rbs)} RBs, {cur} data through {through}")
+
+
+def dedupe_names(lst):
+    """Two players with one name (e.g. Adrian Peterson) -> add rookie year: 'Adrian Peterson (2007)'."""
+    from collections import Counter
+    counts = Counter(p["n"] for p in lst)
+    for p in lst:
+        if counts[p["n"]] > 1:
+            p["n"] = f'{p["n"]} ({p["s"]})'
+
+
+# ---------------------------------------------------------------------------
+# 3b. Running backs: per-season rushing + receiving
+# ---------------------------------------------------------------------------
+def build_rbs(wk):
+    """RBs = players whose most common listed position is RB. Careers must start in 1999+."""
+    pos = wk[wk.position != ""].groupby("player_id").position.agg(lambda s: s.mode().iat[0])
+    rb_ids = set(pos[pos == "RB"].index)
+    r = wk[wk.player_id.isin(rb_ids) & (wk.start >= 1999)]
+
+    agg = r.groupby(["player_id", "player_display_name", "start", "k", "pt"]).agg(
+        g=("week", "size"), att=("carries", "sum"),
+        ryd=("rushing_yards", "sum"), rtd=("rushing_tds", "sum"),
+        recyd=("receiving_yards", "sum"), rectd=("receiving_tds", "sum")).reset_index()
+    agg["syd"] = agg.ryd + agg.recyd                      # scrimmage yards
+
+    # Keep RBs who could plausibly chart: >= 3,000 scrimmage yds overall, or an 800-yd season
+    tot = agg.groupby("player_id").syd.sum()
+    best = agg.groupby(["player_id", "k"]).syd.sum().groupby("player_id").max()
+    keep = set(tot[tot >= 3000].index) | set(best[best >= 800].index)
+    agg = agg[agg.player_id.isin(keep)]
+
+    # row = [season#, gameType, G, carries, rushYds, rushTD, recYds, recTD]
+    rbs = []
+    for (pid, name, start), grp in agg.groupby(["player_id", "player_display_name", "start"]):
+        rows = [[int(x.k), int(x.pt), int(x.g), int(x.att), int(x.ryd), int(x.rtd),
+                 int(x.recyd), int(x.rectd)] for x in grp.itertuples()]
+        rbs.append({"n": name, "s": int(start), "r": rows})
+    return rbs
 
 
 # ---------------------------------------------------------------------------
