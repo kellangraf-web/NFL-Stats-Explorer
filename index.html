@@ -140,6 +140,13 @@
   th.sortable:hover { color: var(--text-primary); }
   th.sorted { color: var(--text-primary); font-weight: 650; }
   th .arr { font-size: 9px; margin-left: 3px; }
+  .notes-h, .sourcing h3 { font-size: 13px; color: var(--text-secondary); margin: 0 0 6px; letter-spacing: .02em; text-transform: uppercase; }
+  .sourcing { margin-top: 18px; padding: 14px 16px; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.55; }
+  .sourcing ul { margin: 0; padding-left: 18px; }
+  .sourcing li { margin: 4px 0; }
+  .sourcing a, .notes a { color: var(--series-1); }
+  .src-foot { margin: 8px 0 0; color: var(--text-muted); font-size: 12px; }
   .notes { color: var(--text-muted); font-size: 12px; margin-top: 18px; line-height: 1.55; }
   .notes p { margin: 4px 0; }
 </style>
@@ -221,8 +228,8 @@
   </div>
 
   <div class="notes">
-    <p><b>Data:</b> 1970–1998 regular seasons from <a href="https://github.com/fantasydatapros/data">fantasydatapros</a> (Pro Football Reference season totals, cross-checked against nflverse and NFL.com). 1999–<span class="curYr">2026</span> from nflverse game-level stats (<span class="curYr">2026</span> through <span id="through">Week 10</span>), updated automatically every morning. Games = games with at least one recorded stat. Click any table header to sort by it; click again to flip the order. Passing yards are gross (sacks not subtracted); nflverse totals can differ from official totals by a few yards per player. Three 1999–2000 games missing from nflverse (Rams–Ravens, Chiefs–Chargers, Bills–Dolphins) are filled in from the season totals.</p>
-    <p><b>Careers before 1999:</b> only regular-season totals exist, so those players appear only with Playoffs set to <i>Excluded</i> and the slider on <i>Seasons</i>. Exceptions: Dan Marino, Brett Favre and Jim Kelly (playoff games entered by hand; a few per-round splits approximate) and Peyton Manning and Kurt Warner (no playoff games before 1999) appear in every view; in Games mode their pre-1999 seasons are spread evenly across their games. Careers that began before 1970 (e.g. Johnny Unitas, Jim Brown) aren't included.</p>
+    <h3 class="notes-h">Notes</h3>
+    <p><b>Tables:</b> click any column header to sort by it; click again to flip the order.</p>
     <div class="tabnote" data-for="qb">
     <p><b>Quarterbacks tab:</b> the Total chart includes every player with enough yards, at any position.</p>
     </div>
@@ -239,6 +246,21 @@
     <p><b>Slider:</b> <span id="sliderNote"></span> A retired player whose career was shorter than N counts with his full career.</p>
     <p><b>*</b> means the player is still active and his window includes the current <span class="curYr">2026</span> season (or one he hasn't reached yet), so his totals will keep growing.</p>
   </div>
+
+  <!-- How the data is sourced (shown on every tab; position line follows the tab) -->
+  <section class="sourcing" id="sources" aria-labelledby="sources-h">
+    <h3 id="sources-h">How the data is sourced</h3>
+    <ul>
+      <li><b>1999 to today:</b> game-by-game player stats from <a href="https://github.com/nflverse/nflverse-data">nflverse</a>, an open-source project built from the NFL's official game data. Regular season and playoffs; preseason is excluded. A GitHub Action rebuilds the data every morning and republishes the site whenever new games have been played (currently through <span class="throughCopy">Week 10</span> of <span class="curYr">2026</span>).</li>
+      <li><b>1970–1998:</b> regular-season totals from <a href="https://github.com/fantasydatapros/data">fantasydatapros</a>, which compiles Pro Football Reference season stats. Before adding it, we checked it against nflverse for every player-season both cover (1999–2021): about 99% match exactly and season totals agree within 0.1%. Every pre-1999 season for Dan Marino, Emmitt Smith and Jerry Rice also matches NFL.com exactly.</li>
+      <li><b>Playoffs before 1999:</b> this source has no playoff stats, so those players appear only with Playoffs set to <i>Excluded</i> and the slider on <i>Seasons</i>. Exceptions: Dan Marino's, Brett Favre's and Jim Kelly's playoff games were entered by hand from Pro Football Reference and StatMuse (a few per-round splits are approximate), and Peyton Manning and Kurt Warner played no playoff games before 1999.</li>
+      <li><b>Games mode before 1999:</b> there are no game-by-game stats, so for the five players above each pre-1999 season is spread evenly across its games; season totals still add up exactly.</li>
+      <li><b>Fixes:</b> three regular-season games are missing from nflverse (1999 Rams–Ravens, 2000 Chiefs–Chargers and Bills–Dolphins); each affected player's missing game is filled in from his season totals.</li>
+      <li><b>Players:</b> <span id="posRule"></span> Seasons count from the rookie year. "Games" counts games with at least one recorded stat. Passing yards are gross (sacks not subtracted). Two players with the same name show their rookie year, e.g. Adrian Peterson (2007).</li>
+      <li><b>Not included:</b> careers that began before 1970 (e.g. Johnny Unitas, Jim Brown), and stats from other leagues (AFL before 1970, USFL, CFL).</li>
+    </ul>
+    <p class="src-foot">Code and data: <a href="https://github.com/kellangraf-web/NFL-Stats-Explorer">github.com/kellangraf-web/NFL-Stats-Explorer</a></p>
+  </section>
 </div>
 </div>
 
@@ -718,6 +740,12 @@ function setTab(t, dur = 300) {
   const T = TABS[t];
   if (state.n > maxN()) state.n = maxN();               // clamp when the new tab's max is lower
   updateSliderNote();
+  // Who's in this tab (shown in the data-sourcing section)
+  d3.select('#posRule').text({
+    qb: 'The Passing chart covers quarterbacks; the Total chart includes every player with enough yards at any position.',
+    rb: "Running backs are players whose most-listed position is RB.",
+    wr: "Wide receivers are players whose most-listed position is WR (tight ends have their own tab).",
+    te: "Tight ends are players whose most-listed position is TE."}[t]);
   // Show one or two chart cards, then size the visible ones
   d3.select('#card-b').style('display', T.slots.b ? null : 'none');
   slotKeys().forEach(setup);
@@ -740,6 +768,7 @@ fetch('players.json').then(r => r.json()).then(d => {
   CUR = d.meta.season;
   d3.selectAll('.curYr').text(CUR);
   d3.select('#through').text(d.meta.through);
+  d3.selectAll('.throughCopy').text(d.meta.through);
   // Autocomplete list of every player in the data
   renderChips();
   // Open the tab named in the link (#qb, #rb or #wr), else quarterbacks
