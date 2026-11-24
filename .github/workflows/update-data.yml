@@ -39,12 +39,12 @@ jobs:
 
       - name: Commit players.json if the stats changed
         run: |
-          if git diff --quiet players.json; then
+          if git diff --quiet players.json games.json; then
             echo "No new games - nothing to commit."
           else
             git config user.name  "github-actions[bot]"
             git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-            git add players.json
+            git add players.json games.json
             git commit -m "Update stats ($(date -u +%Y-%m-%d))"
             git pull --rebase origin main   # pick up anything pushed meanwhile
             git push origin HEAD:main
@@ -52,7 +52,7 @@ jobs:
 
       # --- Publish only the site files (page + data) ---
       - name: Collect site files
-        run: mkdir _site && cp index.html players.json _site/
+        run: mkdir _site && cp index.html players.json games.json _site/
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

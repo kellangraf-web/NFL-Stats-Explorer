@@ -20,7 +20,8 @@ from pathlib import Path
 import pandas as pd
 
 BASE = "https://github.com/nflverse/nflverse-data/releases/download"
-OUT = Path(__file__).with_name("players.json")
+OUT = Path(__file__).with_name("players.json")        # per-season totals (loads first)
+OUT_GAMES = Path(__file__).with_name("games.json")    # per-game rows (loaded when the slider counts games)
 MAXK = 23            # longest window the slider offers (Tom Brady: 2000-2022)
 
 
@@ -57,7 +58,7 @@ def load_weekly(cur):
     """Stack every season's weekly player stats, 1999 -> cur."""
     cols = ["player_id", "player_display_name", "position", "season", "week", "season_type",
             "passing_tds", "rushing_tds", "receiving_tds",
-            "passing_yards", "rushing_yards", "receiving_yards", "carries"]
+            "passing_yards", "rushing_yards", "receiving_yards", "carries", "receptions"]
     frames = []
     for yr in range(1999, cur + 1):
         df = fetch_parquet(f"{BASE}/stats_player/stats_player_week_{yr}.parquet")
@@ -109,26 +110,25 @@ def build():
     # --- Totals: total TDs / yards = passing + rushing + receiving ---
     wk["ttd"] = wk.passing_tds + wk.rushing_tds + wk.receiving_tds
     wk["tyd"] = wk.passing_yards + wk.rushing_yards + wk.receiving_yards
-    agg = wk.groupby(["player_id", "player_display_name", "start", "k", "pt"]).agg(
-        g=("week", "size"),                    # games with at least one recorded stat
-        ptd=("passing_tds", "sum"), ttd=("ttd", "sum"),
-        pyd=("passing_yards", "sum"), tyd=("tyd", "sum")).reset_index()
+    wk["syd"] = wk.rushing_yards + wk.receiving_yards          # scrimmage yards (RB filter)
 
-    # --- Keep players who could plausibly chart (keeps the file small) ---
-    tot = agg.groupby("player_id").tyd.sum()
-    best = agg.groupby(["player_id", "k"]).tyd.sum().groupby("player_id").max()
-    keep = set(tot[tot >= 5000].index) | set(best[best >= 1500].index)
-    agg = agg[agg.player_id.isin(keep)]
+    # --- Primary position = the position a player is listed at most often ---
+    pos = wk[wk.position != ""].groupby("player_id").position.agg(lambda x: x.mode().iat[0])
+    modern = wk.start >= 1999                                  # complete careers only
 
-    # --- One record per player; each row = [season#, gameType, G, passTD, totalTD, passYds, totalYds] ---
-    players = []
-    for (pid, name, start), grp in agg.groupby(["player_id", "player_display_name", "start"]):
-        rows = [[int(r.k), int(r.pt), int(r.g), int(r.ptd), int(r.ttd), int(r.pyd), int(r.tyd)]
-                for r in grp.itertuples()]
-        players.append({"n": name, "s": int(start), "r": rows})
-
-    add_hand_entered(players)
-    rbs = build_rbs(wk)
+    # Each group: who's in it, which stats (output name -> source column), and a size filter
+    qb, qb_games = build_group(wk, wk.index == wk.index,
+        [("ptd", "passing_tds"), ("ttd", "ttd"), ("pyd", "passing_yards"), ("tyd", "tyd")],
+        keep_col="tyd", total_min=5000, season_min=1500)
+    add_hand_entered(qb, qb_games)
+    rb, rb_games = build_group(wk, modern & wk.player_id.map(pos).eq("RB"),
+        [("att", "carries"), ("ryd", "rushing_yards"), ("rtd", "rushing_tds"),
+         ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
+        keep_col="syd", total_min=3000, season_min=800)
+    wr, wr_games = build_group(wk, modern & wk.player_id.map(pos).eq("WR"),
+        [("rec", "receptions"), ("recyd", "receiving_yards"), ("rectd", "receiving_tds")],
+        keep_col="receiving_yards", total_min=3000, season_min=800)
+    finalize_games(rb_games); finalize_games(wr_games)          # (QB list finalized with hand data)
 
     # --- Label for "data through": last week with games in the current season ---
     cur_rows = wk[wk.season == cur]
@@ -139,10 +139,59 @@ def build():
     else:
         through = "the start of the season"
 
-    dedupe_names(players); dedupe_names(rbs)
-    out = {"meta": {"season": cur, "through": through}, "players": players, "rbs": rbs}
+    out = {"meta": {"season": cur, "through": through}, "players": qb, "rbs": rb, "wrs": wr}
     OUT.write_text(json.dumps(out, separators=(",", ":")))
-    print(f"Wrote {OUT.name}: {len(players)} players, {len(rbs)} RBs, {cur} data through {through}")
+    games = {"players": qb_games, "rbs": rb_games, "wrs": wr_games}
+    OUT_GAMES.write_text(json.dumps(games, separators=(",", ":")))
+    print(f"Wrote {OUT.name}: {len(qb)} QB-list, {len(rb)} RBs, {len(wr)} WRs; "
+          f"{OUT_GAMES.name}; {cur} data through {through}")
+
+
+def build_group(wk, mask, stats, keep_col, total_min, season_min):
+    """Per-season rows and per-game rows for one group of players.
+
+    Season row: [season#, gameType, G, stat1, stat2, ...]
+    Game row:   [season#, gameType, stat1, stat2, ...]   (chronological)
+    gameType: 0 = regular season, 1 = playoff, 2 = wild-card playoff.
+    """
+    w = wk[mask]
+    # Keep players who could plausibly chart: enough total yards, or one big season
+    tot = w.groupby("player_id")[keep_col].sum()
+    best = w.groupby(["player_id", "k"])[keep_col].sum().groupby("player_id").max()
+    keep = set(tot[tot >= total_min].index) | set(best[best >= season_min].index)
+    w = w[w.player_id.isin(keep)]
+    names = [n for n, _ in stats]
+
+    # Season totals
+    agg = w.groupby(["player_id", "player_display_name", "start", "k", "pt"]).agg(
+        g=("week", "size"), **{n: (src, "sum") for n, src in stats}).reset_index()
+    seasons = []
+    for (pid, name, start), grp in agg.groupby(["player_id", "player_display_name", "start"]):
+        rows = [[int(r.k), int(r.pt), int(r.g)] + [int(getattr(r, n)) for n in names]
+                for r in grp.itertuples()]
+        seasons.append({"id": pid, "n": name, "s": int(start), "r": rows})
+
+    # Per-game rows, oldest first (o = sort key within a season)
+    w = w.sort_values(["season", "week"])
+    games = {}
+    for pid, grp in w.groupby("player_id", sort=False):
+        games[pid] = [[int(r.k), int(r.pt)] + [int(getattr(r, src)) for _, src in stats] + [int(r.week)]
+                      for r in grp.itertuples()]
+
+    dedupe_names(seasons)
+    # Align game lists with season list order, keyed by the (deduped) name
+    game_list = []
+    for p in seasons:
+        rows = games.pop(p["id"], [])
+        game_list.append({"n": p["n"], "g": rows})
+        del p["id"]
+    return seasons, game_list
+
+
+def finalize_games(game_list):
+    """Sort each player's games by (season#, order) and drop the order column."""
+    for p in game_list:
+        p["g"] = [r[:-1] for r in sorted(p["g"], key=lambda r: (r[0], r[-1]))]
 
 
 def dedupe_names(lst):
@@ -155,36 +204,6 @@ def dedupe_names(lst):
 
 
 # ---------------------------------------------------------------------------
-# 3b. Running backs: per-season rushing + receiving
-# ---------------------------------------------------------------------------
-def build_rbs(wk):
-    """RBs = players whose most common listed position is RB. Careers must start in 1999+."""
-    pos = wk[wk.position != ""].groupby("player_id").position.agg(lambda s: s.mode().iat[0])
-    rb_ids = set(pos[pos == "RB"].index)
-    r = wk[wk.player_id.isin(rb_ids) & (wk.start >= 1999)]
-
-    agg = r.groupby(["player_id", "player_display_name", "start", "k", "pt"]).agg(
-        g=("week", "size"), att=("carries", "sum"),
-        ryd=("rushing_yards", "sum"), rtd=("rushing_tds", "sum"),
-        recyd=("receiving_yards", "sum"), rectd=("receiving_tds", "sum")).reset_index()
-    agg["syd"] = agg.ryd + agg.recyd                      # scrimmage yards
-
-    # Keep RBs who could plausibly chart: >= 3,000 scrimmage yds overall, or an 800-yd season
-    tot = agg.groupby("player_id").syd.sum()
-    best = agg.groupby(["player_id", "k"]).syd.sum().groupby("player_id").max()
-    keep = set(tot[tot >= 3000].index) | set(best[best >= 800].index)
-    agg = agg[agg.player_id.isin(keep)]
-
-    # row = [season#, gameType, G, carries, rushYds, rushTD, recYds, recTD]
-    rbs = []
-    for (pid, name, start), grp in agg.groupby(["player_id", "player_display_name", "start"]):
-        rows = [[int(x.k), int(x.pt), int(x.g), int(x.att), int(x.ryd), int(x.rtd),
-                 int(x.recyd), int(x.rectd)] for x in grp.itertuples()]
-        rbs.append({"n": name, "s": int(start), "r": rows})
-    return rbs
-
-
-# ---------------------------------------------------------------------------
 # 4. Hand-entered seasons before 1999 (NFL.com, Pro Football Reference, StatMuse)
 #    Rushing figures and a few playoff per-game splits are approximate.
 # ---------------------------------------------------------------------------
@@ -193,13 +212,26 @@ def season(k, g, ptd, pyd, rtd, ryd, post=0):
     return [k, post, g, ptd, ptd + rtd, pyd, pyd + ryd]
 
 
-def add_hand_entered(players):
+def add_hand_entered(players, game_list):
     def P(name):
         return next(p for p in players if p["n"] == name)
 
+    def spread(name, rows):
+        """Per-game rows for hand seasons: each season's totals split evenly over its games
+        (approximate). Regular-season games come first, then wild card, then later rounds."""
+        G = next(p for p in game_list if p["n"] == name)["g"]
+        for k, pt, g, *vals in rows:
+            order0 = {0: 0, 2: 100, 1: 200}[pt]
+            # Whole numbers that add back exactly: each game gets v // g, and the
+            # remainder is handed out one per game from the first game on.
+            split = [[v // g + (1 if i < v - (v // g) * g else 0) for i in range(g)] for v in vals]
+            for i in range(g):
+                G.append([k, pt] + [col[i] for col in split] + [order0 + i])
+
     # Rookie (1998) seasons that predate the nflverse data
-    P("Peyton Manning")["r"].append([1, 0, 16, 26, 26, 3739, 3739 + 62])
-    P("Kurt Warner")["r"].append([1, 0, 1, 0, 0, 39, 39])
+    manning98, warner98 = [[1, 0, 16, 26, 26, 3739, 3739 + 62]], [[1, 0, 1, 0, 0, 39, 39]]
+    P("Peyton Manning")["r"] += manning98; spread("Peyton Manning", manning98)
+    P("Kurt Warner")["r"] += warner98;     spread("Kurt Warner", warner98)
 
     # Marino 1983-1998 (1999 comes from nflverse). 1994 playoffs = remainder of career playoff totals.
     marino = [season(1,11,20,2210,2,45), season(2,16,48,5084,0,-7), season(3,16,30,4137,0,-24),
@@ -229,9 +261,11 @@ def add_hand_entered(players):
              season(6,3,5,665,0,0,1), season(7,2,1,259,0,0,1), season(8,3,2,707,0,0,1),
              season(10,1,1,195,0,0,2), season(10,1,1,135,0,0,1), season(11,1,1,239,0,0,2)]
 
-    P("Dan Marino")["r"] += marino;  P("Dan Marino")["approx"] = 1
-    P("Brett Favre")["r"] += favre;  P("Brett Favre")["approx"] = 1
+    P("Dan Marino")["r"] += marino;  P("Dan Marino")["approx"] = 1;  spread("Dan Marino", marino)
+    P("Brett Favre")["r"] += favre;  P("Brett Favre")["approx"] = 1;  spread("Brett Favre", favre)
     players.append({"n": "Jim Kelly", "s": 1986, "r": kelly, "approx": 1})
+    game_list.append({"n": "Jim Kelly", "g": []}); spread("Jim Kelly", kelly)
+    finalize_games(game_list)
 
 
 if __name__ == "__main__":
